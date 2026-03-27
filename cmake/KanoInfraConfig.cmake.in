@@ -1,0 +1,2 @@
+# INCLUDE(.cmake.in)
+# Template for @CONFIG_INCLUDE@ — not used directly; see KanoInfraConfig.cmake
