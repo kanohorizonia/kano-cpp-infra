@@ -34,6 +34,34 @@ typedef struct KanoProcessResult {
     bool timed_out;
 } KanoProcessResult;
 
+typedef enum KanoProcessMode {
+    KANO_PROCESS_MODE_PASS_THROUGH = 0,
+    KANO_PROCESS_MODE_CAPTURE = 1,
+} KanoProcessMode;
+
+typedef enum KanoProcessStream {
+    KANO_PROCESS_STREAM_STDOUT = 0,
+    KANO_PROCESS_STREAM_STDERR = 1,
+} KanoProcessStream;
+
+typedef void (*KanoProcessOutputCallback)(
+    KanoProcessStream stream,
+    const char* chunk,
+    size_t chunk_size,
+    void* user_data
+);
+
+typedef struct KanoProcessOptions {
+    const char* executable;
+    const char* working_dir;
+    const char* const* argv;
+    size_t argv_count;
+    KanoProcessMode mode;
+    int timeout_ms;
+    KanoProcessOutputCallback output_callback;
+    void* user_data;
+} KanoProcessOptions;
+
 /* ---------------------------------------------------------------------------
  * Lifecycle
  * --------------------------------------------------------------------------- */
@@ -43,6 +71,13 @@ typedef struct KanoProcessResult {
  * If working_dir is not NULL, the process runs in that directory.
  */
 KanoProcess kano_process_spawn(const char* executable, const char* working_dir, ...);
+
+/**
+ * Begin spawning a process using an explicit options struct.
+ * This is the parity-oriented API for consumers that need argv arrays,
+ * working-dir control, capture mode, timeout input, and output callbacks.
+ */
+KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options);
 
 /**
  * Wait for a spawned process to complete. Copies stdout/stderr into result.
@@ -71,6 +106,12 @@ void kano_process_free_result(KanoProcessResult* result);
  * stdout/stderr are allocated and must be freed by the caller.
  */
 bool kano_process_run(const char* executable, KanoProcessResult* out_result, ...);
+
+/**
+ * Run a process synchronously using an explicit options struct.
+ * This preserves the old API while providing a path toward richer adapters.
+ */
+bool kano_process_run_ex(const KanoProcessOptions* options, KanoProcessResult* out_result);
 
 /* ---------------------------------------------------------------------------
  * Query (only valid after spawn, before free)
