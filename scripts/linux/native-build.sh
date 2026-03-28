@@ -7,8 +7,8 @@
 #   - Windows/macOS host + Docker → Docker-based build
 #
 # Usage (infra entrypoint):
-#   KOG_CPP_ROOT=<src/cpp-root> bash <infra>/scripts/linux/native-build.sh \
-#       <configure-preset> <build-preset>
+#   KANO_CPP_ROOT=<src/cpp-root> bash <infra>/scripts/linux/native-build.sh \
+#       <configure-preset> <build-preset> [prefix]
 #
 # Consumer pixi.toml typically calls this with hardcoded presets:
 #   bash <infra>/scripts/linux/native-build.sh linux-ninja-clang linux-ninja-clang-debug
@@ -16,7 +16,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export KOG_CPP_ROOT="${KOG_CPP_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+if [[ -z "${KANO_CPP_ROOT:-${KOG_CPP_ROOT:-${KOB_CPP_ROOT:-}}}" ]]; then
+    export KANO_CPP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+fi
 
 # Source infra's generic unix preset runner
 # shellcheck disable=SC1091
@@ -29,13 +31,14 @@ source "${SCRIPT_DIR}/docker-build.sh"
 detect_host_and_build() {
     local in_configure_preset="${1:-}"
     local in_build_preset="${2:-}"
+    local build_prefix="${3:-KANO}"
     local host_os
     host_os="$(uname -s 2>/dev/null || true)"
 
     case "$host_os" in
         Linux)
             echo "[INFO] Linux host detected → native build"
-            kano_cpp_run_unix_preset "$in_configure_preset" "$in_build_preset" KOG
+            kano_cpp_run_unix_preset "$in_configure_preset" "$in_build_preset" "$build_prefix"
             ;;
         Darwin|MINGW*|MSYS*|CYGWIN*)
             if command -v docker >/dev/null 2>&1; then
@@ -53,4 +56,4 @@ detect_host_and_build() {
     esac
 }
 
-detect_host_and_build "${1:-linux-ninja-clang}" "${2:-linux-ninja-clang-debug}"
+detect_host_and_build "${1:-linux-ninja-clang}" "${2:-linux-ninja-clang-debug}" "${3:-KANO}"

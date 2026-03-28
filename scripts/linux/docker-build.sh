@@ -3,7 +3,7 @@
 # Linux Docker Build Helper — kano-cpp-infra
 # =============================================================================
 # Runs a Linux preset build inside a Docker container.
-# Consumer sets KOG_CPP_ROOT before calling.
+# Consumer sets KANO_CPP_ROOT / KOG_CPP_ROOT / KOB_CPP_ROOT before calling.
 # =============================================================================
 set -euo pipefail
 
@@ -42,8 +42,11 @@ kano_cpp_run_linux_preset_via_docker() {
     exit 1
   fi
 
+  local cpp_root
+  cpp_root="$(kano_cpp_root)"
+
   local repo_root_win
-  repo_root_win="$(cd "${KOG_CPP_ROOT:-.}/../.." && pwd -W)"
+  repo_root_win="$(cd "${cpp_root}/../.." && pwd -W)"
   repo_root_win="${repo_root_win//\'/\'\'}"
 
   # --security_opt seccomp=unconfined: required for sanitizer builds (TSan uses
