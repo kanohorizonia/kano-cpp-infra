@@ -8,6 +8,40 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KABSD_WINDOWS_PS_HELPER="$SCRIPT_DIR/windows_preset_helper.ps1"
+KABSD_COMMON_BUILD_METADATA_SH="$SCRIPT_DIR/../common/build_metadata.sh"
+
+if [[ -f "$KABSD_COMMON_BUILD_METADATA_SH" ]]; then
+  # shellcheck disable=SC1090
+  source "$KABSD_COMMON_BUILD_METADATA_SH"
+fi
+
+kabsd_build_prefix() {
+  printf '%s' "${KABSD_BUILD_PREFIX:-KOB}"
+}
+
+kabsd_cpp_root() {
+  if declare -F kano_cpp_root >/dev/null 2>&1; then
+    kano_cpp_root
+    return 0
+  fi
+  if [[ -n "${KOB_CPP_ROOT:-${KABSD_CPP_ROOT:-}}" ]]; then
+    printf '%s' "${KOB_CPP_ROOT:-${KABSD_CPP_ROOT:-}}"
+    return 0
+  fi
+  pwd
+}
+
+kabsd_apply_self_build_config() {
+  if declare -F kano_cpp_apply_self_build_config >/dev/null 2>&1; then
+    kano_cpp_apply_self_build_config "$(kabsd_build_prefix)"
+  fi
+}
+
+kabsd_collect_build_metadata() {
+  if declare -F kano_cpp_collect_build_metadata >/dev/null 2>&1; then
+    kano_cpp_collect_build_metadata "$(kabsd_build_prefix)"
+  fi
+}
 
 kabsd_powershell_bin() {
   local candidate
@@ -32,12 +66,12 @@ kabsd_run_windows_build() {
     return 127
   }
 
-  kob_apply_self_build_config
-  kob_collect_build_metadata
+  kabsd_apply_self_build_config
+  kabsd_collect_build_metadata
 
   "$powershell_bin" -NoProfile -ExecutionPolicy Bypass -File "$KABSD_WINDOWS_PS_HELPER" \
     -Action run-build \
-    -Root "$(kob_cpp_root)" \
+    -Root "$(kabsd_cpp_root)" \
     -BuildDir "$build_dir" \
     -Config "$config" \
     -Generator "$generator" \
@@ -75,7 +109,7 @@ kabsd_run_windows_preset() {
     exit 1
   fi
 
-  local requested_vcvars="${KOB_VCVARSALL:-}"
+  local requested_vcvars="${KOB_VCVARSALL:-${KANO_VCVARSALL:-}}"
   local resolved_vcvars=""
   if [[ -n "$requested_vcvars" ]]; then
     resolved_vcvars="$requested_vcvars"
@@ -90,12 +124,12 @@ kabsd_run_windows_preset() {
     exit 1
   fi
 
-  kob_apply_self_build_config
-  kob_collect_build_metadata
+  kabsd_apply_self_build_config
+  kabsd_collect_build_metadata
 
   kabsd_run_windows_ps_helper \
     -Action run-preset \
-    -Root "$(kob_cpp_root)" \
+    -Root "$(kabsd_cpp_root)" \
     -Vcvars "$resolved_vcvars" \
     -Arch "$in_vcvars_arch" \
     -ConfigurePreset "$in_configure_preset" \
@@ -111,7 +145,7 @@ kabsd_configure_windows_preset() {
     exit 1
   fi
 
-  local requested_vcvars="${KOB_VCVARSALL:-}"
+  local requested_vcvars="${KOB_VCVARSALL:-${KANO_VCVARSALL:-}}"
   local resolved_vcvars=""
   if [[ -n "$requested_vcvars" ]]; then
     resolved_vcvars="$requested_vcvars"
@@ -126,12 +160,12 @@ kabsd_configure_windows_preset() {
     exit 1
   fi
 
-  kob_apply_self_build_config
-  kob_collect_build_metadata
+  kabsd_apply_self_build_config
+  kabsd_collect_build_metadata
 
   kabsd_run_windows_ps_helper \
     -Action configure-preset \
-    -Root "$(kob_cpp_root)" \
+    -Root "$(kabsd_cpp_root)" \
     -Vcvars "$resolved_vcvars" \
     -Arch "$in_vcvars_arch" \
     -ConfigurePreset "$in_configure_preset"
