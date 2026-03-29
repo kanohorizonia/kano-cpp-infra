@@ -16,7 +16,7 @@ kano_cpp_remote_build_macos() {
   local configure_preset="${4:-}"
   local build_preset="${5:-}"
   local ssh_opts="${6:--o StrictHostKeyChecking=no -o ConnectTimeout=10}"
-  local ssh_opts_rsync="${7:-o StrictHostKeyChecking=no -o ConnectTimeout=10}"
+  local ssh_opts_rsync="${7:--o StrictHostKeyChecking=no -o ConnectTimeout=10}"
 
   if [[ -z "$source_repo" || -z "$remote_build_dir" || -z "$fallback_host" || -z "$configure_preset" || -z "$build_preset" ]]; then
     echo "kano_cpp_remote_build_macos requires source_repo, remote_build_dir, fallback_host, configure_preset, and build_preset" >&2
