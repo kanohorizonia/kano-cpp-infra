@@ -51,5 +51,5 @@ kano_cpp_run_linux_preset_via_docker() {
 
   # --security_opt seccomp=unconfined: required for sanitizer builds (TSan uses
   # personality(ADDR_NO_RANDOMIZE) which the default Docker seccomp profile blocks)
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "& { docker run --rm --security-opt seccomp=unconfined -v '$repo_root_win:/work' -w /work/src/cpp ubuntu:25.10 bash -lc 'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build gcc-15 g++-15 git && rm -rf /work/src/cpp/out/obj/$in_configure_preset && cmake --preset $in_configure_preset && cmake --build --preset $in_build_preset'; exit \$LASTEXITCODE }"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "& { docker run --rm --security-opt seccomp=unconfined -v '$repo_root_win:/work' -w /work/src/cpp ubuntu:25.10 bash -lc 'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y     cmake ninja-build gcc-15 g++-15 clang lld git && rm -rf /work/src/cpp/out/obj/$in_configure_preset && cmake --preset $in_configure_preset && cmake --build --preset $in_build_preset'; exit \$LASTEXITCODE }"
 }
