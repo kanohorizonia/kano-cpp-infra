@@ -141,21 +141,23 @@ static char* kano_process_build_command_line(KanoProcess proc) {
     char* cmd;
     char* out;
 
-    total += strlen(proc->executable) + 3;
-    for (i = 0; i < proc->arg_count; ++i) {
-        total += strlen(proc->args[i]) + 3;
+    // Executable: no quotes (Windows CreateProcessA parses first token as executable name)
+    total += strlen(proc->executable);
+    // Args: quoted (skip argv[0] since it's the same as executable)
+    for (i = 1; i < proc->arg_count; ++i) {
+        total += 3 + strlen(proc->args[i]);  // space + quote + arg + quote
     }
 
     cmd = (char*)malloc(total + 1);
     if (!cmd) return NULL;
 
     out = cmd;
-    *out++ = '"';
+    // Executable first (no quotes)
     memcpy(out, proc->executable, strlen(proc->executable));
     out += strlen(proc->executable);
-    *out++ = '"';
 
-    for (i = 0; i < proc->arg_count; ++i) {
+    // Then quoted args (skip argv[0])
+    for (i = 1; i < proc->arg_count; ++i) {
         *out++ = ' ';
         *out++ = '"';
         memcpy(out, proc->args[i], strlen(proc->args[i]));
