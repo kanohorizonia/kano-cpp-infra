@@ -12,7 +12,7 @@ param(
   [string]$Vcvars = "",
   [string]$ConfigurePreset = "",
   [string]$BuildPreset = "",
-  [string]$VcvarsVersion = "14.44.35207"
+  [string]$VcvarsVersion = "${env:KANO_VCVARS_VERSION:-14.44.35207}"
 )
 
 Set-StrictMode -Version Latest
