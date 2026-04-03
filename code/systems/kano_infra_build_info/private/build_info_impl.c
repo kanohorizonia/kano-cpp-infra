@@ -1,4 +1,4 @@
-/* build_info_impl.cpp — build metadata discovery implementation
+/* build_info_impl.c — build metadata discovery implementation
  *
  * Populates build info from KANO_INFRA_BUILD_* preprocessor definitions
  * injected by the consuming project's CMakeLists.txt.
@@ -39,7 +39,7 @@
 #define KANO_INFRA_BUILD_COMPILER unknown
 #endif
 #ifndef KANO_INFRA_BUILD_TIMESTAMP
-#define KANO_INFRA_BUILD_TIMESTAMP 1970-01-01T00:00:00Z
+#define KANO_INFRA_BUILD_TIMESTAMP "1970-01-01T00:00:00Z"
 #endif
 #ifndef KANO_INFRA_BUILD_VCS_STATUS
 #define KANO_INFRA_BUILD_VCS_STATUS unknown

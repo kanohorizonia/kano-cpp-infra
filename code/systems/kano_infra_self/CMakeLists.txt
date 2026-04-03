@@ -1,5 +1,5 @@
 add_library(kano_infra_self
-    private/self_impl.cpp
+    private/self_impl.c
 )
 target_include_directories(kano_infra_self PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/public>"
