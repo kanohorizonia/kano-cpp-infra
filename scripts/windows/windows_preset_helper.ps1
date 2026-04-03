@@ -12,11 +12,18 @@ param(
   [string]$Vcvars = "",
   [string]$ConfigurePreset = "",
   [string]$BuildPreset = "",
-  [string]$VcvarsVersion = "${env:KANO_VCVARS_VERSION:-14.44.35207}"
+  [string]$VcvarsVersion = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($VcvarsVersion)) {
+  $VcvarsVersion = $env:KANO_VCVARS_VERSION
+}
+if ([string]::IsNullOrWhiteSpace($VcvarsVersion)) {
+  $VcvarsVersion = "14.44.35207"
+}
 
 function Detect-VsDevCmd {
   $preferred = @(
