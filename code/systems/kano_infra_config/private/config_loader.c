@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>
 
 #include "kano_config.h"
 #include "kano_config_export.h"
@@ -40,6 +41,14 @@ static void* xrealloc(void* p, size_t n) {
         free(p);
     }
     return r;
+}
+
+static char* kano_strtok_reentrant(char* str, const char* delim, char** saveptr) {
+#if defined(_WIN32)
+    return strtok_s(str, delim, saveptr);
+#else
+    return strtok_r(str, delim, saveptr);
+#endif
 }
 
 /* ============================================================================
@@ -331,7 +340,7 @@ static char* parse_array(const char* raw) {
     char* inner = xstrndup(raw + 1, len - 2);
     char* ctx_inner = inner;
     char* saveptr = NULL;
-    char* item_tok = strtok_r(inner, ",", &saveptr);
+    char* item_tok = kano_strtok_reentrant(inner, ",", &saveptr);
     int items_cap = 8;
     char** items = (char**)malloc(items_cap * sizeof(char*));
     int item_count = 0;
@@ -357,7 +366,7 @@ static char* parse_array(const char* raw) {
             }
             item_count++;
         }
-        item_tok = strtok_r(NULL, ",", &saveptr);
+        item_tok = kano_strtok_reentrant(NULL, ",", &saveptr);
     }
     free(ctx_inner);
 
@@ -571,6 +580,14 @@ static const char* get_section_prefix(const char* section) {
  * ============================================================================ */
 
 KANO_CONFIG_API
+KanoConfig kano_config_create_empty(void) {
+    KanoConfig cfg = (KanoConfig)calloc(1, sizeof(struct KanoConfigImpl));
+    if (!cfg) return NULL;
+    tomap_init(&cfg->data);
+    return cfg;
+}
+
+KANO_CONFIG_API
 KanoConfig kano_config_load(const char* filepath) {
     if (!filepath) return NULL;
 
@@ -587,7 +604,7 @@ KanoConfig kano_config_load(const char* filepath) {
     }
     fclose(f);
 
-    KanoConfig cfg = (KanoConfig)malloc(sizeof(struct KanoConfigImpl));
+    KanoConfig cfg = kano_config_create_empty();
     if (!cfg) {
         tomap_free(&data);
         return NULL;
@@ -686,6 +703,43 @@ bool kano_config_merge(KanoConfig cfg, KanoConfig other) {
         if (nv.s) nv.s = xstrdup(nv.s);
         tomap_set(&cfg->data, e->key, nv);
     }
+    return true;
+}
+
+KANO_CONFIG_API
+bool kano_config_foreach(KanoConfig cfg, KanoConfigForEachFn callback, void* user_data) {
+    if (!cfg || !callback) return false;
+
+    size_t cursor = 0;
+    TomlEntry* e;
+    while ((e = tomap_iter_next(&cfg->data, &cursor)) != NULL) {
+        KanoConfigEntryView view;
+        memset(&view, 0, sizeof(view));
+        view.key = e->key;
+        view.type = (KanoConfigValueType)e->value.type;
+
+        switch (e->value.type) {
+            case TOML_STRING:
+            case TOML_ARRAY:
+            case TOML_TABLE:
+                view.string_value = e->value.s;
+                break;
+            case TOML_INTEGER:
+                view.integer_value = e->value.i;
+                break;
+            case TOML_FLOAT:
+                view.float_value = e->value.f;
+                break;
+            case TOML_BOOLEAN:
+                view.bool_value = e->value.b != 0;
+                break;
+        }
+
+        if (!callback(&view, user_data)) {
+            return false;
+        }
+    }
+
     return true;
 }
 

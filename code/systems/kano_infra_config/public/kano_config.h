@@ -14,6 +14,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,9 +25,34 @@ extern "C" {
  * --------------------------------------------------------------------------- */
 typedef struct KanoConfigImpl* KanoConfig;
 
+typedef enum KanoConfigValueType {
+    KANO_CONFIG_VALUE_STRING = 0,
+    KANO_CONFIG_VALUE_INTEGER,
+    KANO_CONFIG_VALUE_FLOAT,
+    KANO_CONFIG_VALUE_BOOLEAN,
+    KANO_CONFIG_VALUE_ARRAY,
+    KANO_CONFIG_VALUE_TABLE,
+} KanoConfigValueType;
+
+typedef struct KanoConfigEntryView {
+    const char* key;
+    KanoConfigValueType type;
+    const char* string_value;
+    int64_t integer_value;
+    double float_value;
+    bool bool_value;
+} KanoConfigEntryView;
+
+typedef bool (*KanoConfigForEachFn)(const KanoConfigEntryView* entry, void* user_data);
+
 /* ---------------------------------------------------------------------------
  * Lifecycle
  * --------------------------------------------------------------------------- */
+/**
+ * Create an empty config object for callers that want to merge explicit layers.
+ */
+KanoConfig kano_config_create_empty(void);
+
 /**
  * Load a TOML config file. Returns NULL on failure.
  * The config object owns its memory; call kano_config_free() to release.
@@ -71,10 +97,16 @@ bool kano_config_has(KanoConfig cfg, const char* key);
  * Merge
  * --------------------------------------------------------------------------- */
 /**
- * Merge another config into cfg (cfg takes priority on conflict).
- * Returns false if merge fails (e.g. type mismatch); cfg unchanged.
+ * Merge another config into cfg (other takes priority on conflict).
+ * Returns false if merge fails; entries copied before failure remain applied.
  */
 bool kano_config_merge(KanoConfig cfg, KanoConfig other);
+
+/**
+ * Iterate through all flattened config entries in insertion order.
+ * Returns false only when cfg/callback are invalid or the callback aborts.
+ */
+bool kano_config_foreach(KanoConfig cfg, KanoConfigForEachFn callback, void* user_data);
 
 /* ---------------------------------------------------------------------------
  * Path discovery
