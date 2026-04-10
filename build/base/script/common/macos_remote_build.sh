@@ -1,18 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# macOS Remote Build — git-master thin adapter over shared infra
+# macOS Remote Build helper
 # =============================================================================
 set -euo pipefail
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KOG_INFRA_MACOS_REMOTE_BUILD_SH="$SCRIPT_DIR/../../shared/infra/scripts/common/macos_remote_build.sh"
-if [[ ! -f "$KOG_INFRA_MACOS_REMOTE_BUILD_SH" ]]; then
-    echo "shared infra macOS remote build script not found: $KOG_INFRA_MACOS_REMOTE_BUILD_SH" >&2
-    exit 1
-fi
-
-# shellcheck disable=SC1091
-source "$KOG_INFRA_MACOS_REMOTE_BUILD_SH"
 
 KOB_MACBUILDER_HOST="${KOB_MACBUILDER_HOST:-dorgon.chang@macbuilder.cobia-tailor.ts.net}"
 KOB_REMOTE_BUILD_DIR="${KOB_REMOTE_BUILD_DIR:-/tmp/kano-build}"

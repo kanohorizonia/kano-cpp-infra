@@ -1,15 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KOG_SHARED_BUILD_METADATA_SH="${KOG_CPP_ROOT:-$SCRIPT_DIR/../../shared/infra}/shared/infra/scripts/common/build_metadata.sh"
-if [[ ! -f "$KOG_SHARED_BUILD_METADATA_SH" ]]; then
-  KOG_SHARED_BUILD_METADATA_SH="$SCRIPT_DIR/../../shared/infra/scripts/common/build_metadata.sh"
-fi
-if [[ -f "$KOG_SHARED_BUILD_METADATA_SH" ]]; then
-  source "$KOG_SHARED_BUILD_METADATA_SH"
-fi
-
 _kog_trim() {
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
