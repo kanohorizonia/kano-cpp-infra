@@ -3,9 +3,10 @@
 set -euo pipefail
 
 KOG_PROFILE_COMMON_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-KOG_PROFILE_SCRIPT_ROOT="$(cd -- "$KOG_PROFILE_COMMON_DIR/.." && pwd)"
-KOG_PROFILE_CPP_ROOT="$(cd -- "$KOG_PROFILE_SCRIPT_ROOT/.." && pwd)"
-KOG_PROFILE_REPO_ROOT="$(cd -- "$KOG_PROFILE_CPP_ROOT/../.." && pwd)"
+# Allow wrapper scripts to override these via env vars; fall back to derivation from BASH_SOURCE
+KOG_PROFILE_SCRIPT_ROOT="${KOG_PROFILE_SCRIPT_ROOT:-$(cd -- "$KOG_PROFILE_COMMON_DIR/.." && pwd)}"
+KOG_PROFILE_CPP_ROOT="${KOG_PROFILE_CPP_ROOT:-$(cd -- "$KOG_PROFILE_SCRIPT_ROOT/.." && pwd)}"
+KOG_PROFILE_REPO_ROOT="${KOG_PROFILE_REPO_ROOT:-$(cd -- "$KOG_PROFILE_CPP_ROOT/../.." && pwd)}"
 KOG_PROFILE_TMP_ROOT="${KOG_PROFILE_TMP_ROOT:-$KOG_PROFILE_REPO_ROOT/.kano/tmp/profiling}"
 KOG_PROFILE_REPORT_ROOT="${KOG_PROFILE_REPORT_ROOT:-$KOG_PROFILE_REPO_ROOT/docs/profiling}"
 
