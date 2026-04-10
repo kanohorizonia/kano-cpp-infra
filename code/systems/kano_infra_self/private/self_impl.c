@@ -13,6 +13,7 @@
 #include <limits.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stdint.h>
 
 #if defined(_WIN32)
     #include <sys/stat.h>
@@ -24,7 +25,23 @@
     #define PATH_SEP '/'
 #endif
 
+#if defined(_WIN32) && !defined(PATH_MAX)
+    #define PATH_MAX _MAX_PATH
+#endif
+
 #include "kano_self.h"
+
+struct KanoSelfStepImpl {
+    KanoSelfStepType type;
+    char* target;
+    char* description;
+};
+
+struct KanoSelfStepSeqImpl {
+    KanoSelfStep* steps;
+    size_t count;
+    size_t capacity;
+};
 
 /* ---------------------------------------------------------------------------
  * Memory utilities
@@ -460,12 +477,6 @@ static const PresetItem* find_default_configure(const PresetSets* ps) {
 /* ---------------------------------------------------------------------------
  * Build a KanoSelfStepSeq from parsed presets
  * --------------------------------------------------------------------------- */
-
-struct KanoSelfStepSeqImpl {
-    KanoSelfStep* steps;
-    size_t count;
-    size_t capacity;
-};
 
 static KanoSelfStepSeq build_seq_from_presets(const PresetSets* ps,
                                                const char* repo_root) {

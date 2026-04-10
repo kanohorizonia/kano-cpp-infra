@@ -58,6 +58,22 @@ static char* kano_process_dup_string(const char* value) {
     return out;
 }
 
+#ifdef _WIN32
+static bool kano_process_is_cmd_executable(const char* executable) {
+    const char* base = executable;
+    const char* cursor;
+
+    if (!executable) return false;
+    for (cursor = executable; *cursor; ++cursor) {
+        if (*cursor == '\\' || *cursor == '/') {
+            base = cursor + 1;
+        }
+    }
+
+    return _stricmp(base, "cmd") == 0 || _stricmp(base, "cmd.exe") == 0;
+}
+#endif
+
 static bool kano_process_copy_args(KanoProcess proc, const char* const* argv, size_t argv_count) {
     size_t i;
 
@@ -159,6 +175,13 @@ static char* kano_process_build_command_line(KanoProcess proc) {
     // Then quoted args (skip argv[0])
     for (i = 1; i < proc->arg_count; ++i) {
         *out++ = ' ';
+#ifdef _WIN32
+        if (kano_process_is_cmd_executable(proc->executable) && proc->args[i][0] == '/') {
+            memcpy(out, proc->args[i], strlen(proc->args[i]));
+            out += strlen(proc->args[i]);
+            continue;
+        }
+#endif
         *out++ = '"';
         memcpy(out, proc->args[i], strlen(proc->args[i]));
         out += strlen(proc->args[i]);
