@@ -6,7 +6,7 @@
 # overrides (e.g. LLVM prefix, CMAKE_OSX_ARCHITECTURES, remote macBuilder).
 #
 # Usage:
-#   KOG_CPP_ROOT=<src/cpp-root> bash <infra>/scripts/macos/native-build.sh \
+#   KOG_CPP_ROOT=<src/cpp-root> bash <infra>/scripts/mac/native-build.sh \
 #       <configure-preset> <build-preset>
 #
 # Consumers with custom LLVM/SDK logic (like git-master) should keep their
