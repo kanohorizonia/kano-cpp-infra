@@ -92,12 +92,20 @@ def main() -> int:
             "artifacts": artifacts,
         }
 
+        baseline_script = os.environ.get(
+            "KOG_BASELINE_SCRIPT",
+            str(cpp_root / "src/cpp/scripts/common/measure_iteration_baseline.sh")
+        )
+        pgo_script = os.environ.get(
+            "KOG_PGO_REBUILD_SCRIPT",
+            str(cpp_root / "src/cpp/scripts/workflows/pgo-rebuild.sh")
+        )
         if workflow == "pgo":
-            command = ["bash", "src/cpp/scripts/workflows/pgo-rebuild.sh"]
+            command = ["bash", pgo_script]
         else:
             command = [
                 "bash",
-                "src/cpp/scripts/common/measure_iteration_baseline.sh",
+                baseline_script,
                 "--configure-preset",
                 str(case.get("configurePreset", defaults["configurePreset"])),
                 "--build-preset",
