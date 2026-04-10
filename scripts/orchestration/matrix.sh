@@ -3,8 +3,8 @@
 set -euo pipefail
 
 KOG_MATRIX_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-KOG_MATRIX_CPP_ROOT="$(cd -- "$KOG_MATRIX_SCRIPT_DIR/../.." && pwd)"
-KOG_MATRIX_BASE="$KOG_MATRIX_CPP_ROOT/scripts"
+KOG_MATRIX_CPP_ROOT="$(cd -- "$KOG_MATRIX_SCRIPT_DIR/../../../../.." && pwd)"
+KOG_MATRIX_BASE="$KOG_MATRIX_CPP_ROOT/src/cpp/scripts"
 
 kog_matrix_host_os() {
   local os_name
@@ -32,16 +32,16 @@ kog_matrix_default_release_script() {
   case "$os_name" in
     win64)
       if [[ "$arch" == "arm64" ]]; then
-        printf '%s\n' "$KOG_MATRIX_BASE/win64/ninja-msvc-arm64-release.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/windows/ninja-msvc-arm64-release.sh"
       else
-        printf '%s\n' "$KOG_MATRIX_BASE/win64/ninja-msvc-release.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/windows/ninja-msvc-release.sh"
       fi
       ;;
     mac)
       if [[ "$arch" == "arm64" ]]; then
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/ninja-clang-arm64-release.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/ninja-clang-arm64-release.sh"
       else
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/ninja-clang-x64-release.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/ninja-clang-release.sh"
       fi
       ;;
     *)
@@ -55,12 +55,12 @@ kog_matrix_default_test_report_script() {
   os_name="$(kog_matrix_host_os)"
   arch="$(kog_matrix_arch)"
   case "$os_name" in
-    win64) printf '%s\n' "$KOG_MATRIX_BASE/win64/test-report.sh" ;;
+    win64) printf '%s\n' "$KOG_MATRIX_BASE/windows/test-report.sh" ;;
     mac)
       if [[ "$arch" == "arm64" ]]; then
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/test-report-arm64.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/test-report-arm64.sh"
       else
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/test-report.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/test-report.sh"
       fi
       ;;
     *) printf '%s\n' "$KOG_MATRIX_BASE/linux/test-report.sh" ;;
@@ -72,12 +72,12 @@ kog_matrix_default_coverage_build_script() {
   os_name="$(kog_matrix_host_os)"
   arch="$(kog_matrix_arch)"
   case "$os_name" in
-    win64) printf '%s\n' "$KOG_MATRIX_BASE/win64/ninja-msvc-coverage-build.sh" ;;
+    win64) printf '%s\n' "$KOG_MATRIX_BASE/windows/ninja-msvc-coverage-build.sh" ;;
     mac)
       if [[ "$arch" == "arm64" ]]; then
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/ninja-clang-arm64-coverage-build.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/ninja-clang-arm64-coverage-build.sh"
       else
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/ninja-clang-coverage-build.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/ninja-clang-coverage-build.sh"
       fi
       ;;
     *) printf '%s\n' "$KOG_MATRIX_BASE/linux/ninja-clang-coverage-build.sh" ;;
@@ -89,12 +89,12 @@ kog_matrix_default_coverage_gather_script() {
   os_name="$(kog_matrix_host_os)"
   arch="$(kog_matrix_arch)"
   case "$os_name" in
-    win64) printf '%s\n' "$KOG_MATRIX_BASE/win64/ninja-msvc-coverage-run.sh" ;;
+    win64) printf '%s\n' "$KOG_MATRIX_BASE/windows/ninja-msvc-coverage-run.sh" ;;
     mac)
       if [[ "$arch" == "arm64" ]]; then
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/ninja-clang-arm64-coverage-run.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/ninja-clang-arm64-coverage-run.sh"
       else
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/ninja-clang-coverage-run.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/ninja-clang-coverage-run.sh"
       fi
       ;;
     *) printf '%s\n' "$KOG_MATRIX_BASE/linux/ninja-clang-coverage-run.sh" ;;
@@ -109,16 +109,16 @@ kog_matrix_default_coverage_report_script() {
   case "$os_name" in
     win64)
       if [[ "$backend" == "opencppcoverage" ]]; then
-        printf '%s\n' "$KOG_MATRIX_BASE/win64/coverage-report-opencppcoverage.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/windows/coverage-report-opencppcoverage.sh"
       else
-        printf '%s\n' "$KOG_MATRIX_BASE/win64/coverage-report-microsoft.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/windows/coverage-report-microsoft.sh"
       fi
       ;;
     mac)
       if [[ "$arch" == "arm64" ]]; then
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/coverage-report-llvm-arm64.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/coverage-report-llvm-arm64.sh"
       else
-        printf '%s\n' "$KOG_MATRIX_BASE/mac/coverage-report-llvm.sh"
+        printf '%s\n' "$KOG_MATRIX_BASE/macos/coverage-report-llvm.sh"
       fi
       ;;
     *) printf '%s\n' "$KOG_MATRIX_BASE/linux/coverage-report-llvm.sh" ;;

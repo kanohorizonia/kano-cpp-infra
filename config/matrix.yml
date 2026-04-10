@@ -1,0 +1,297 @@
+# C++ Native Pipeline — Build Matrix Configuration
+#
+# Canonical source of truth for all matrix axes and allowed values.
+# This file is the configuration input; shell scripts consume it.
+#
+# Design doc: ../design/cpp-stage-contract.md
+# CPP-INFRA-001
+
+---
+# =============================================================================
+# MATRIX AXES
+# =============================================================================
+# Axes define the dimensions of the build matrix.
+# Each axis lists all allowed values.
+# =============================================================================
+
+axes:
+
+  # ---------------------------------------------------------------------------
+  # platform — operating system family
+  # Mapped to subdirectory names under src/cpp/scripts/{platform}/
+  # ---------------------------------------------------------------------------
+  platform:
+    - windows   # MINGW/MSYS/CYGWIN on x64 or arm64
+    - macos    # Darwin/macOS on x64 or arm64
+    - linux    # Linux (gcc or clang)
+
+  # ---------------------------------------------------------------------------
+  # arch — CPU architecture
+  # ---------------------------------------------------------------------------
+  arch:
+    - x64
+    - arm64
+
+  # ---------------------------------------------------------------------------
+  # toolchain — compiler toolchain
+  # ---------------------------------------------------------------------------
+  toolchain:
+    - msvc     # Microsoft Visual C++ (Windows only)
+    - clang    # LLVM Clang (macOS, Linux)
+    - gcc      # GNU Compiler Collection (Linux only)
+
+  # ---------------------------------------------------------------------------
+  # build_preset — build configuration / optimization mode
+  # ---------------------------------------------------------------------------
+  build_preset:
+    - debug        # Debug symbols, no optimization
+    - release      # Full optimization, no debug symbols
+    - relwithdebinfo  # Optimized with debug symbols
+    - pgi          # Profile-guided optimization (instrumented build)
+
+  # ---------------------------------------------------------------------------
+  # coverage_mode — coverage instrumentation approach
+  # ---------------------------------------------------------------------------
+  coverage_mode:
+    - none         # No coverage instrumentation
+    - llvm         # LLVM Source-based Coverage (Clang)
+    - microsoft    # Microsoft Coverage (MSVC)
+    - opencppcoverage  # OpenCppCoverage (Windows alternative)
+
+  # ---------------------------------------------------------------------------
+  # test_scope — which tests to run
+  # ---------------------------------------------------------------------------
+  test_scope:
+    - unit         # Unit tests only
+    - integration  # Integration tests only
+    - all          # All tests (unit + integration)
+    - smoke        # Smoke/sanity tests only
+
+  # ---------------------------------------------------------------------------
+  # report_mode — how reports are rendered
+  # ---------------------------------------------------------------------------
+  report_mode:
+    - junit        # JUnit XML output (machine-readable)
+    - html         # HTML report (human-readable)
+    - cobertura    # Cobertura XML (CI integration)
+    - all          # All report formats
+
+  # ---------------------------------------------------------------------------
+  # artifact_intent — intended use of the output artifact
+  # ---------------------------------------------------------------------------
+  artifact_intent:
+    - developer    # Local developer use (fast turnaround)
+    - ci           # CI/CD consumption (reliable, traceable)
+    - release      # Release distribution (optimized, stripped)
+    - analysis     # Profiling/coverage analysis
+
+# =============================================================================
+# AXIS COMBINATIONS (allowed matrix cells)
+# =============================================================================
+# Not all axis combinations are valid. This section defines which
+# combinations are supported and maps them to platform adapter paths.
+# =============================================================================
+
+combinations:
+
+  # ---------------------------------------------------------------------------
+  # Native Release Build
+  # Preset: release
+  # Toolchain: msvc (windows), clang (macos/linux), gcc (linux)
+  # Coverage: none
+  # Test scope: all
+  # ---------------------------------------------------------------------------
+  release_build:
+    description: "One-shot release build for developer or CI use"
+    platform: [windows, macos, linux]
+    arch: [x64, arm64]
+    toolchain: [msvc, clang, gcc]
+    build_preset: [release]
+    coverage_mode: [none]
+    test_scope: [all]
+    artifact_intent: [developer, ci]
+    adapter_subpath: "{platform}/ninja-{toolchain}{arch_suffix}-release.sh"
+    arch_suffix_map:
+      x64:   ""
+      arm64: "-arm64"
+
+  # ---------------------------------------------------------------------------
+  # Coverage Build + Gather + Report
+  # Preset: release
+  # Toolchain: msvc/clang/gcc
+  # Coverage: llvm/microsoft/opencppcoverage
+  # ---------------------------------------------------------------------------
+  coverage_pipeline:
+    description: "Full coverage pipeline: build with coverage + gather + report"
+    platform: [windows, macos, linux]
+    arch: [x64, arm64]
+    toolchain: [msvc, clang, gcc]
+    build_preset: [release]
+    coverage_mode: [llvm, microsoft, opencppcoverage]
+    test_scope: [all]
+    artifact_intent: [ci]
+    stages:
+      - coverage-build
+      - coverage-gather
+      - coverage-report
+
+  # ---------------------------------------------------------------------------
+  # PGO — Profile-Guided Optimization (3-stage)
+  # ---------------------------------------------------------------------------
+  pgo_pipeline:
+    description: "3-stage PGO: instrumented build → profile gather → optimized build"
+    platform: [windows, macos, linux]
+    arch: [x64, arm64]
+    toolchain: [msvc, clang, gcc]
+    build_preset: [pgi, release]
+    coverage_mode: [none]
+    test_scope: [all]
+    artifact_intent: [release]
+    stages:
+      - pgi-build       # Phase 1: instrumented build
+      - pgo-gather      # Phase 2: run representative workload, collect profiles
+      - pgo-build       # Phase 3: optimized build using collected profiles
+
+  # ---------------------------------------------------------------------------
+  # Profile Run
+  # ---------------------------------------------------------------------------
+  profiling:
+    description: "Run profiling matrix and render report"
+    platform: [windows, macos, linux]
+    arch: [x64]
+    toolchain: [clang, gcc]
+    build_preset: [release]
+    coverage_mode: [none]
+    test_scope: [unit]
+    artifact_intent: [analysis]
+    stages:
+      - profile
+      - profile-report
+
+  # ---------------------------------------------------------------------------
+  # Test Report
+  # ---------------------------------------------------------------------------
+  test_report:
+    description: "Run tests and render JUnit/HTML test report"
+    platform: [windows, macos, linux]
+    arch: [x64, arm64]
+    toolchain: [msvc, clang, gcc]
+    build_preset: [release, debug]
+    coverage_mode: [none]
+    test_scope: [all, unit, integration, smoke]
+    artifact_intent: [ci]
+    stages:
+      - test
+      - test-report
+
+  # ---------------------------------------------------------------------------
+  # Package Reports
+  # ---------------------------------------------------------------------------
+  package_reports:
+    description: "Package all reports into distribution bundle"
+    platform: [windows, macos, linux]
+    arch: [x64]
+    toolchain: [msvc, clang, gcc]
+    build_preset: [release]
+    coverage_mode: [none]
+    test_scope: [all]
+    artifact_intent: [ci, release]
+    stages:
+      - package-reports
+
+# =============================================================================
+# PLATFORM ADAPTER DISPATCH
+# =============================================================================
+# How the matrix resolves a stage to a platform-specific script path.
+# Template variables: {platform}, {arch}, {toolchain}, {arch_suffix}
+# =============================================================================
+
+adapter_dispatch:
+
+  build:
+    script_template: "{platform}/ninja-{toolchain}{arch_suffix}-release.sh"
+    notes: "Delegates to self/build.sh → matrix → platform script"
+
+  test:
+    script_template: "{platform}/test{arch_suffix}.sh"
+    notes: "Accepts KOG_TEST_COMMAND env override"
+
+  test-report:
+    script_template: "{platform}/test-report{arch_suffix}.sh"
+    notes: "Many platform variants missing — known gap documented in design doc"
+
+  coverage-build:
+    script_template: "{platform}/ninja-{toolchain}{arch_suffix}-coverage-build.sh"
+
+  coverage-gather:
+    script_template: "{platform}/ninja-{toolchain}{arch_suffix}-coverage-run.sh"
+
+  coverage-report:
+    script_template: "{platform}/coverage-report-{backend}{arch_suffix}.sh"
+    backend_values:
+      windows:
+        microsoft:      "coverage-report-microsoft.sh"
+        opencppcoverage: "coverage-report-opencppcoverage.sh"
+      macos:
+        llvm: "coverage-report-llvm{arch_suffix}.sh"
+      linux:
+        llvm: "coverage-report-llvm.sh"
+
+  pgi-build:
+    script_template: "{platform}/ninja-{toolchain}{arch_suffix}-pgi-build.sh"
+
+  pgo-gather:
+    script_template: "{platform}/ninja-{toolchain}{arch_suffix}-pgo-gather.sh"
+
+  pgo-build:
+    script_template: "{platform}/ninja-{toolchain}{arch_suffix}-pgo-build.sh"
+
+  profile:
+    script_template: "{platform}/profile-{matrix_name}.sh"
+
+  profile-report:
+    script_template: "{platform}/profile-report-{matrix_name}.sh"
+
+  package-reports:
+    script_template: "common/package-reports-with-skill.sh"
+    notes: "Delegates to skill adapter, not platform-specific"
+
+# =============================================================================
+# KNOWN GAPS (2026-04-10)
+# =============================================================================
+# Platform adapters that are referenced in matrix but do not yet exist.
+# These must be filled in before the architecture is healthy.
+# =============================================================================
+
+known_gaps:
+  - id: WIN64_TEST_REPORT
+    referenced_by: "matrix.sh kog_matrix_default_test_report_script() → windows/test-report.sh"
+    status: MISSING
+
+  - id: MAC_TEST_REPORT
+    referenced_by: "matrix.sh → mac/test-report.sh, mac/test-report-arm64.sh"
+    status: MISSING
+
+  - id: LINUX_TEST_REPORT
+    referenced_by: "matrix.sh → linux/test-report.sh"
+    status: MISSING
+
+  - id: WIN64_NINJA_MSVCS_RELEASE
+    referenced_by: "matrix.sh → windows/ninja-msvc-release.sh"
+    status: MISSING
+
+  - id: LINUX_NINJA_GCC_RELEASE
+    referenced_by: "matrix.sh → linux/ninja-gcc-release.sh"
+    status: MISSING
+
+  - id: WIN64_NINJA_CLANG_COVERAGE_RUN
+    referenced_by: "matrix.sh → windows/ninja-msvc-coverage-run.sh"
+    status: MISSING (should use clang toolchain)
+
+  - id: MACOS_NINJA_CLANG_COVERAGE_RUN
+    referenced_by: "matrix.sh → macos/ninja-clang-coverage-run.sh"
+    status: MISSING
+
+  - id: LINUX_NINJA_CLANG_COVERAGE_RUN
+    referenced_by: "matrix.sh → linux/ninja-clang-coverage-run.sh"
+    status: MISSING
