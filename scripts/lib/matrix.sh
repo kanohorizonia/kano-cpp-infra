@@ -4,7 +4,7 @@ set -euo pipefail
 
 INF_MATRIX_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 INF_MATRIX_CPP_ROOT="$(cd -- "$INF_MATRIX_SCRIPT_DIR/../../../../.." && pwd)"
-INF_MATRIX_BASE="$INF_MATRIX_SCRIPT_DIR/../.."
+INF_MATRIX_BASE="$INF_MATRIX_SCRIPT_DIR/.."
 
 inf_matrix_host_os() {
   local os_name
