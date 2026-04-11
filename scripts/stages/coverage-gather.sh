@@ -5,5 +5,5 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/../orchestration/matrix.sh"
 
-coverage_script="$(kog_matrix_default_coverage_gather_script)"
+coverage_script="$(inf_matrix_default_coverage_gather_script)"
 exec bash "$coverage_script" "$@"

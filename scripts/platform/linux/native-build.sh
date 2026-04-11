@@ -16,13 +16,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -z "${KANO_CPP_ROOT:-${KOG_CPP_ROOT:-${KOB_CPP_ROOT:-}}}" ]]; then
+if [[ -z "${KANO_CPP_ROOT:-${INF_CPP_ROOT:-${KOB_CPP_ROOT:-}}}" ]]; then
     export KANO_CPP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 fi
 
 # Source infra's generic unix preset runner
 # shellcheck disable=SC1091
-source "${SCRIPT_DIR}/../common/unix_preset_build.sh"
+source "${SCRIPT_DIR}/../../lib/unix_preset_build.sh"
 
 # Source infra's Docker Linux build helper (for cross-host builds)
 # shellcheck disable=SC1091

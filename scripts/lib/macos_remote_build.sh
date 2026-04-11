@@ -9,13 +9,13 @@ KOB_REMOTE_BUILD_DIR="${KOB_REMOTE_BUILD_DIR:-/tmp/kano-build}"
 KOB_SSH_OPTS="${KOB_SSH_OPTS:--o StrictHostKeyChecking=no -o ConnectTimeout=10}"
 KOB_SSH_OPTS_RSYNC="${KOB_SSH_OPTS_RSYNC:-o StrictHostKeyChecking=no -o ConnectTimeout=10}"
 
-kog_remote_build_macos() {
+inf_remote_build_macos() {
     local in_configure_preset="${1:-}"
     local in_build_type="${2:-Release}"
-    local source_repo="${KOG_CPP_ROOT:-}"
+    local source_repo="${INF_CPP_ROOT:-}"
 
     if [[ -z "$source_repo" ]]; then
-        echo "[ERROR] KOG_CPP_ROOT not set" >&2
+        echo "[ERROR] INF_CPP_ROOT not set" >&2
         return 1
     fi
 

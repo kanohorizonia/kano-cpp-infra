@@ -45,36 +45,36 @@ def main() -> int:
         case_root = matrix_root / case_id
         case_root.mkdir(parents=True, exist_ok=True)
         env = os.environ.copy()
-        env["KOG_CPP_ROOT"] = str(cpp_root)
-        env["KOG_PROFILE_CASE_ID"] = case_id
-        env["KOG_PROFILE_MATRIX"] = matrix_name
-        env["KOG_PROFILE_REPORT_SLUG"] = report_slug
+        env["INF_CPP_ROOT"] = str(cpp_root)
+        env["INF_PROFILE_CASE_ID"] = case_id
+        env["INF_PROFILE_MATRIX"] = matrix_name
+        env["INF_PROFILE_REPORT_SLUG"] = report_slug
 
         launcher = str(case.get("launcher", defaults.get("launcher", "auto")))
         if launcher:
-            env["KOG_COMPILER_LAUNCHER"] = launcher
+            env["INF_COMPILER_LAUNCHER"] = launcher
 
         cache_args: dict[str, str] = {}
         modules = str(case.get("modules", defaults.get("modules", "off"))).lower()
-        cache_args["KOG_ENABLE_MODULES"] = "ON" if modules == "on" else "OFF"
+        cache_args["INF_ENABLE_MODULES"] = "ON" if modules == "on" else "OFF"
 
         unity = str(case.get("unity", defaults.get("unity", "off"))).lower()
-        cache_args["KOG_ENABLE_UNITY_BUILD"] = "OFF" if unity == "off" else "ON"
+        cache_args["INF_ENABLE_UNITY_BUILD"] = "OFF" if unity == "off" else "ON"
         if unity in {"full", "changed"}:
-            cache_args["KOG_UNITY_BUILD_MODE"] = unity
+            cache_args["INF_UNITY_BUILD_MODE"] = unity
 
         if str(case.get("coverage", defaults.get("coverage", "off"))).lower() == "on":
-            cache_args["KOG_ENABLE_COVERAGE"] = "ON"
+            cache_args["INF_ENABLE_COVERAGE"] = "ON"
 
         pgo_mode = str(case.get("pgo", defaults.get("pgo", "off"))).lower()
         workflow = str(case.get("workflow", defaults.get("workflow", "baseline"))).lower()
 
         if pgo_mode == "collect":
-            cache_args["KOG_PGO_MODE"] = "collect"
+            cache_args["INF_PGO_MODE"] = "collect"
         elif pgo_mode == "use":
-            cache_args["KOG_PGO_MODE"] = "use"
+            cache_args["INF_PGO_MODE"] = "use"
 
-        env["KOG_CMAKE_CACHE_ARGS_JSON"] = json.dumps(cache_args)
+        env["INF_CMAKE_CACHE_ARGS_JSON"] = json.dumps(cache_args)
 
         output_csv = case_root / "baseline.csv"
         artifacts: dict[str, str] = {"caseRoot": str(case_root)}
@@ -93,12 +93,12 @@ def main() -> int:
         }
 
         baseline_script = os.environ.get(
-            "KOG_BASELINE_SCRIPT",
-            str(cpp_root / "src/cpp/scripts/common/measure_iteration_baseline.sh")
+            "INF_BASELINE_SCRIPT",
+            str(cpp_root / "shared/infra/scripts/common/measure_iteration_baseline.sh")
         )
         pgo_script = os.environ.get(
-            "KOG_PGO_REBUILD_SCRIPT",
-            str(cpp_root / "src/cpp/scripts/workflows/pgo-rebuild.sh")
+            "INF_PGO_REBUILD_SCRIPT",
+            str(cpp_root / "shared/infra/scripts/workflows/pgo-rebuild.sh")
         )
         if workflow == "pgo":
             command = ["bash", pgo_script]

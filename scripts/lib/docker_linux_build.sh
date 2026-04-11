@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -z "${KOG_CPP_ROOT:-}" ]]; then
-  echo "KOG_CPP_ROOT is not set." >&2
+if [[ -z "${INF_CPP_ROOT:-}" ]]; then
+  echo "INF_CPP_ROOT is not set." >&2
   exit 1
 fi
 
-kog_run_linux_preset_via_docker() {
+inf_run_linux_preset_via_docker() {
   local InConfigurePreset="$1"
   local InBuildPreset="$2"
 
@@ -21,7 +21,7 @@ kog_run_linux_preset_via_docker() {
   fi
 
   local RepoRootWin
-  RepoRootWin="$(cd "$KOG_CPP_ROOT/../.." && pwd -W)"
+  RepoRootWin="$(cd "$INF_CPP_ROOT/../.." && pwd -W)"
   RepoRootWin="${RepoRootWin//\'/\'\'}"
 
   # --security-opt seccomp=unconfined: required for sanitizer builds (TSan uses

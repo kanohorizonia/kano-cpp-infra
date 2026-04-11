@@ -54,7 +54,7 @@ Commands:
   info                    Show coverage environment
 
 Canonical path:
-  bash src/cpp/scripts/common/coverage_report.sh <command>
+  bash src/cpp/shared/infra/scripts/common/coverage_report.sh <command>
 EOF
             ;;
         "")

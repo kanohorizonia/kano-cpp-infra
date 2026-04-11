@@ -3,7 +3,7 @@
 # Linux Docker Build Helper — kano-cpp-infra
 # =============================================================================
 # Runs a Linux preset build inside a Docker container.
-# Consumer sets KANO_CPP_ROOT / KOG_CPP_ROOT / KOB_CPP_ROOT before calling.
+# Consumer sets KANO_CPP_ROOT / INF_CPP_ROOT / KOB_CPP_ROOT before calling.
 # =============================================================================
 set -euo pipefail
 
@@ -11,9 +11,9 @@ set -euo pipefail
 _INFRA_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source common build metadata (infra version — always available via submodule)
-if [[ -f "${_INFRA_SCRIPTS_DIR}/../common/build_metadata.sh" ]]; then
+if [[ -f "${_INFRA_SCRIPTS_DIR}/../../lib/build_metadata.sh" ]]; then
   # shellcheck disable=SC1091
-  source "${_INFRA_SCRIPTS_DIR}/../common/build_metadata.sh"
+  source "${_INFRA_SCRIPTS_DIR}/../../lib/build_metadata.sh"
 fi
 
 # =============================================================================

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-_kog_trim() {
+_kano_cpp_infra_trim() {
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
 }
 
-_kog_default_unknown() {
+_kano_cpp_infra_default_unknown() {
   local value="$1"
   if [[ -z "$value" ]]; then
     printf '%s' "unknown"
@@ -17,11 +17,11 @@ _kog_default_unknown() {
   printf '%s' "$value"
 }
 
-_kog_lower() {
+_kano_cpp_infra_lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
-_kog_home_dir() {
+_kano_cpp_infra_home_dir() {
   if [[ -n "${HOME:-}" ]]; then
     printf '%s' "$HOME"
     return 0
@@ -33,10 +33,10 @@ _kog_home_dir() {
   return 1
 }
 
-_kog_default_cache_dir_for_launcher() {
+_kano_cpp_infra_default_cache_dir_for_launcher() {
   local launcher_name="$1"
   local home_dir=""
-  home_dir="$(_kog_home_dir || true)"
+  home_dir="$(_kano_cpp_infra_home_dir || true)"
   if [[ -z "$home_dir" ]]; then
     return 1
   fi
@@ -58,27 +58,27 @@ _kog_default_cache_dir_for_launcher() {
   return 1
 }
 
-kog_apply_fastbuild_env() {
+kano_cpp_infra_apply_fastbuild_env() {
   local home_dir=""
-  home_dir="$(_kog_home_dir || true)"
+  home_dir="$(_kano_cpp_infra_home_dir || true)"
 
-  local fastbuild_root="${KOG_FASTBUILD_ROOT:-}"
+  local fastbuild_root="${KANO_CPP_INFRA_FASTBUILD_ROOT:-}"
   if [[ -z "$fastbuild_root" && -d "D:/Application/FASTBuild" ]]; then
     fastbuild_root="D:/Application/FASTBuild"
   fi
   if [[ -n "$fastbuild_root" ]]; then
-    export KOG_FASTBUILD_ROOT="$fastbuild_root"
+    export KANO_CPP_INFRA_FASTBUILD_ROOT="$fastbuild_root"
     if [[ -x "$fastbuild_root/FBuild.exe" ]]; then
-      export KOG_FASTBUILD_EXECUTABLE="$fastbuild_root/FBuild.exe"
+      export KANO_CPP_INFRA_FASTBUILD_EXECUTABLE="$fastbuild_root/FBuild.exe"
     fi
   fi
 
-  export KOG_COMPILER_LAUNCHER="none"
-  unset KOG_COMPILER_LAUNCHER_RESOLVED || true
+  export KANO_CPP_INFRA_COMPILER_LAUNCHER="none"
+  unset KANO_CPP_INFRA_COMPILER_LAUNCHER_RESOLVED || true
 
   local cache_dir="${FASTBUILD_CACHE_PATH:-}"
   if [[ -z "$cache_dir" ]]; then
-    cache_dir="$(_kog_default_cache_dir_for_launcher fastbuild || true)"
+    cache_dir="$(_kano_cpp_infra_default_cache_dir_for_launcher fastbuild || true)"
   fi
   if [[ -n "$cache_dir" ]]; then
     export FASTBUILD_CACHE_PATH="$cache_dir"
@@ -98,13 +98,13 @@ kog_apply_fastbuild_env() {
     mkdir -p "$FASTBUILD_TEMP_PATH" >/dev/null 2>&1 || true
   fi
 
-  echo "[launcher][fastbuild][info] exe=${KOG_FASTBUILD_EXECUTABLE:-unknown} cache_dir=${FASTBUILD_CACHE_PATH:-unknown} brokerage=${FASTBUILD_BROKERAGE_PATH:-unknown} cache_mode=${FASTBUILD_CACHE_MODE:-unknown}" >&2
+  echo "[launcher][fastbuild][info] exe=${KANO_CPP_INFRA_FASTBUILD_EXECUTABLE:-unknown} cache_dir=${FASTBUILD_CACHE_PATH:-unknown} brokerage=${FASTBUILD_BROKERAGE_PATH:-unknown} cache_mode=${FASTBUILD_CACHE_MODE:-unknown}" >&2
 }
 
-_kog_select_compiler_launcher() {
+_kano_cpp_infra_select_compiler_launcher() {
   local configured="$1"
   local normalized=""
-  normalized="$(_kog_lower "$(_kog_trim "$configured")")"
+  normalized="$(_kano_cpp_infra_lower "$(_kano_cpp_infra_trim "$configured")")"
 
   case "$normalized" in
     ""|none)
@@ -156,20 +156,12 @@ _kog_select_compiler_launcher() {
   esac
 }
 
-kog_workspace_root() {
-  if declare -F kano_cpp_workspace_root >/dev/null 2>&1; then
-    kano_cpp_workspace_root
-    return 0
-  fi
-  local cpp_root="${KOG_CPP_ROOT:-$(pwd)}"
+kano_cpp_infra_workspace_root() {
+  local cpp_root="${KANO_CPP_INFRA_CPP_ROOT:-$(pwd)}"
   (cd "$cpp_root/../.." && pwd)
 }
 
-_kog_extract_toml_section_value() {
-  if declare -F _kano_cpp_extract_toml_section_value >/dev/null 2>&1; then
-    _kano_cpp_extract_toml_section_value "$@"
-    return 0
-  fi
+_kano_cpp_infra_extract_toml_section_value() {
   local file_path="$1"
   local section_name="$2"
   local key_name="$3"
@@ -205,25 +197,20 @@ _kog_extract_toml_section_value() {
   ' "$file_path" | tail -n 1
 }
 
-kog_resolve_self_config_value() {
-  if declare -F kano_cpp_resolve_self_config_value >/dev/null 2>&1; then
-    kano_cpp_resolve_self_config_value "$1"
-    return 0
-  fi
+kano_cpp_infra_resolve_self_config_value() {
   local key_name="$1"
   local workspace_root
   local home_dir="${HOME:-}"
   local value=""
   local file_path=""
-  workspace_root="$(kog_workspace_root)"
+  workspace_root="$(kano_cpp_infra_workspace_root)"
 
   for file_path in \
-    "$workspace_root/.kano/kog_config.toml" \
-    "$home_dir/.kano/kog_config.toml" \
-    "$workspace_root/.kano/kog_config.toml"; do
+    "$workspace_root/.kano/kano_cpp_infra_config.toml" \
+    "$home_dir/.kano/kano_cpp_infra_config.toml"; do
     if [[ -f "$file_path" ]]; then
       local candidate=""
-      candidate="$(_kog_extract_toml_section_value "$file_path" "self" "$key_name")"
+      candidate="$(_kano_cpp_infra_extract_toml_section_value "$file_path" "self" "$key_name")"
       if [[ -n "$candidate" ]]; then
         value="$candidate"
       fi
@@ -233,24 +220,24 @@ kog_resolve_self_config_value() {
   printf '%s' "$value"
 }
 
-kog_apply_self_build_config() {
-  unset KOG_COMPILER_LAUNCHER_RESOLVED || true
-  if [[ -z "${KOG_COMPILER_LAUNCHER:-}" ]]; then
+kano_cpp_infra_apply_self_build_config() {
+  unset KANO_CPP_INFRA_COMPILER_LAUNCHER_RESOLVED || true
+  if [[ -z "${KANO_CPP_INFRA_COMPILER_LAUNCHER:-}" ]]; then
     local configured_launcher=""
-    configured_launcher="$(kog_resolve_self_config_value "compiler_launcher")"
+    configured_launcher="$(kano_cpp_infra_resolve_self_config_value "compiler_launcher")"
     if [[ -n "$configured_launcher" ]]; then
-      export KOG_COMPILER_LAUNCHER="$configured_launcher"
+      export KANO_CPP_INFRA_COMPILER_LAUNCHER="$configured_launcher"
     fi
   fi
 
   local resolved_launcher=""
-  if resolved_launcher="$(_kog_select_compiler_launcher "${KOG_COMPILER_LAUNCHER:-}")"; then
+  if resolved_launcher="$(_kano_cpp_infra_select_compiler_launcher "${KANO_CPP_INFRA_COMPILER_LAUNCHER:-}")"; then
     local launcher_name
-    launcher_name="$(_kog_lower "$(basename "$resolved_launcher" .exe)")"
-    export KOG_COMPILER_LAUNCHER_RESOLVED="$resolved_launcher"
+    launcher_name="$(_kano_cpp_infra_lower "$(basename "$resolved_launcher" .exe)")"
+    export KANO_CPP_INFRA_COMPILER_LAUNCHER_RESOLVED="$resolved_launcher"
 
     local cache_dir=""
-    cache_dir="$(_kog_default_cache_dir_for_launcher "$launcher_name" || true)"
+    cache_dir="$(_kano_cpp_infra_default_cache_dir_for_launcher "$launcher_name" || true)"
     if [[ "$launcher_name" == "sccache" ]]; then
       if [[ -z "${SCCACHE_DIR:-}" && -n "$cache_dir" ]]; then
         export SCCACHE_DIR="$cache_dir"
@@ -267,14 +254,14 @@ kog_apply_self_build_config() {
       echo "[launcher][compiler-cache][info] launcher=$resolved_launcher" >&2
     fi
   else
-    if [[ -n "${KOG_COMPILER_LAUNCHER:-}" && "$(_kog_lower "${KOG_COMPILER_LAUNCHER}")" != "none" ]]; then
-      echo "[launcher][compiler-cache][warn] requested launcher unavailable: ${KOG_COMPILER_LAUNCHER}" >&2
+    if [[ -n "${KANO_CPP_INFRA_COMPILER_LAUNCHER:-}" && "$(_kano_cpp_infra_lower "${KANO_CPP_INFRA_COMPILER_LAUNCHER}")" != "none" ]]; then
+      echo "[launcher][compiler-cache][warn] requested launcher unavailable: ${KANO_CPP_INFRA_COMPILER_LAUNCHER}" >&2
     fi
   fi
 }
 
-kog_collect_build_metadata() {
-  local root="${KOG_CPP_ROOT:-$(pwd)}"
+kano_cpp_infra_collect_build_metadata() {
+  local root="${KANO_CPP_INFRA_CPP_ROOT:-$(pwd)}"
   local vcs="unknown"
   local branch="unknown"
   local revision="unknown"
@@ -286,10 +273,10 @@ kog_collect_build_metadata() {
   local ci
   local context
   local pipeline_id
-  local platform="${KOG_BUILD_PLATFORM:-$(uname -s 2>/dev/null || printf 'unknown')-$(uname -m 2>/dev/null || printf 'unknown')}"
+  local platform="${KANO_CPP_INFRA_BUILD_PLATFORM:-$(uname -s 2>/dev/null || printf 'unknown')-$(uname -m 2>/dev/null || printf 'unknown')}"
 
   timestamp_utc=""
-  host_name="${KOG_BUILD_HOST_NAME:-${HOSTNAME:-$(hostname 2>/dev/null || printf 'unknown')}}"
+  host_name="${KANO_CPP_INFRA_BUILD_HOST_NAME:-${HOSTNAME:-$(hostname 2>/dev/null || printf 'unknown')}}"
   if [[ -n "${CI:-}" ]]; then
     ci="true"
     context="ci"
@@ -297,7 +284,7 @@ kog_collect_build_metadata() {
     ci="false"
     context="local-manual"
   fi
-  pipeline_id="${KOG_BUILD_PIPELINE_ID:-${GITHUB_RUN_ID:-${CI_PIPELINE_ID:-${BUILD_BUILDID:-${BUILD_NUMBER:-$context}}}}}"
+  pipeline_id="${KANO_CPP_INFRA_BUILD_PIPELINE_ID:-${GITHUB_RUN_ID:-${CI_PIPELINE_ID:-${BUILD_BUILDID:-${BUILD_NUMBER:-$context}}}}}"
 
   if command -v git >/dev/null 2>&1 && (cd "$root" && git rev-parse --is-inside-work-tree >/dev/null 2>&1); then
     vcs="git"
@@ -333,15 +320,15 @@ kog_collect_build_metadata() {
     dirty="unknown"
   fi
 
-  export KOG_BUILD_VCS="$(_kog_default_unknown "$(_kog_trim "$vcs")")"
-  export KOG_BUILD_BRANCH="$(_kog_default_unknown "$(_kog_trim "$branch")")"
-  export KOG_BUILD_REVISION="$(_kog_default_unknown "$(_kog_trim "$revision")")"
-  export KOG_BUILD_REVISION_HASH_SHORT="$(_kog_default_unknown "$(_kog_trim "$hash_short")")"
-  export KOG_BUILD_REVISION_HASH="$(_kog_default_unknown "$(_kog_trim "$hash_full")")"
-  export KOG_BUILD_DIRTY="$(_kog_default_unknown "$(_kog_trim "$dirty")")"
-  export KOG_BUILD_HOST_NAME="$(_kog_default_unknown "$(_kog_trim "$host_name")")"
-  export KOG_BUILD_CI="$(_kog_default_unknown "$(_kog_trim "$ci")")"
-  export KOG_BUILD_CONTEXT="$(_kog_default_unknown "$(_kog_trim "$context")")"
-  export KOG_BUILD_PIPELINE_ID="$(_kog_default_unknown "$(_kog_trim "$pipeline_id")")"
-  export KOG_BUILD_PLATFORM="$(_kog_default_unknown "$(_kog_trim "$platform")")"
+  export KANO_CPP_INFRA_BUILD_VCS="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$vcs")")"
+  export KANO_CPP_INFRA_BUILD_BRANCH="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$branch")")"
+  export KANO_CPP_INFRA_BUILD_REVISION="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$revision")")"
+  export KANO_CPP_INFRA_BUILD_REVISION_HASH_SHORT="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$hash_short")")"
+  export KANO_CPP_INFRA_BUILD_REVISION_HASH="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$hash_full")")"
+  export KANO_CPP_INFRA_BUILD_DIRTY="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$dirty")")"
+  export KANO_CPP_INFRA_BUILD_HOST_NAME="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$host_name")")"
+  export KANO_CPP_INFRA_BUILD_CI="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$ci")")"
+  export KANO_CPP_INFRA_BUILD_CONTEXT="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$context")")"
+  export KANO_CPP_INFRA_BUILD_PIPELINE_ID="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$pipeline_id")")"
+  export KANO_CPP_INFRA_BUILD_PLATFORM="$(_kano_cpp_infra_default_unknown "$(_kano_cpp_infra_trim "$platform")")"
 }

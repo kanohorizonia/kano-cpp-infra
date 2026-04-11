@@ -18,7 +18,7 @@ axes:
 
   # ---------------------------------------------------------------------------
   # platform — operating system family
-  # Mapped to subdirectory names under src/cpp/scripts/{platform}/
+  # Mapped to subdirectory names under src/cpp/shared/infra/scripts/platform/
   # ---------------------------------------------------------------------------
   platform:
     - windows   # MINGW/MSYS/CYGWIN on x64 or arm64
@@ -214,7 +214,7 @@ adapter_dispatch:
 
   test:
     script_template: "{platform}/test{arch_suffix}.sh"
-    notes: "Accepts KOG_TEST_COMMAND env override"
+    notes: "Accepts INF_TEST_COMMAND env override"
 
   test-report:
     script_template: "{platform}/test-report{arch_suffix}.sh"
@@ -265,7 +265,7 @@ adapter_dispatch:
 
 known_gaps:
   - id: WIN64_TEST_REPORT
-    referenced_by: "matrix.sh kog_matrix_default_test_report_script() → windows/test-report.sh"
+    referenced_by: "matrix.sh inf_matrix_default_test_report_script() → windows/test-report.sh"
     status: MISSING
 
   - id: MAC_TEST_REPORT

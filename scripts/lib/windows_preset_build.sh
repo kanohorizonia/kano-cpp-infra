@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KANO_WINDOWS_PS_HELPER="$SCRIPT_DIR/windows_preset_helper.ps1"
-KANO_COMMON_BUILD_METADATA_SH="$SCRIPT_DIR/../common/build_metadata.sh"
+KANO_COMMON_BUILD_METADATA_SH="$SCRIPT_DIR/build_metadata.sh"
 
 if [[ -f "$KANO_COMMON_BUILD_METADATA_SH" ]]; then
   # shellcheck disable=SC1090

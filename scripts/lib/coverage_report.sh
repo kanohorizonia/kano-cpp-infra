@@ -20,10 +20,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ─────────────────────────────────────────────────────────────────────────────
 # Coverage directories
 # ─────────────────────────────────────────────────────────────────────────────
-KOG_COVERAGE_ROOT="${KOG_COVERAGE_ROOT:-${KOG_BUILD_ROOT:-$(pwd)/build}/coverage}"
-KOG_COVERAGE_PROFRAW_DIR="$KOG_COVERAGE_ROOT/profraw"
-KOG_COVERAGE_PROFDATA="$KOG_COVERAGE_ROOT/merged.profdata"
-KOG_COVERAGE_HTML_DIR="$KOG_COVERAGE_ROOT/html"
+INF_COVERAGE_ROOT="${INF_COVERAGE_ROOT:-${INF_BUILD_ROOT:-$(pwd)/build}/coverage}"
+INF_COVERAGE_PROFRAW_DIR="$INF_COVERAGE_ROOT/profraw"
+INF_COVERAGE_PROFDATA="$INF_COVERAGE_ROOT/merged.profdata"
+INF_COVERAGE_HTML_DIR="$INF_COVERAGE_ROOT/html"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Utility: Detect platform and compiler
@@ -95,8 +95,8 @@ _is_windows(){ [[ "$(detect_host_os)" == MINGW* || "$(detect_host_os)" == CYGWIN
 # Utility: Ensure directories
 # ─────────────────────────────────────────────────────────────────────────────
 coverage_ensure_dirs() {
-    mkdir -p "$KOG_COVERAGE_PROFRAW_DIR"
-    mkdir -p "$KOG_COVERAGE_HTML_DIR"
+    mkdir -p "$INF_COVERAGE_PROFRAW_DIR"
+    mkdir -p "$INF_COVERAGE_HTML_DIR"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,8 +178,8 @@ coverage_build() {
         # Native build
         echo "[coverage_build] Native build (host=$host_os, target=$target_platform)"
         (
-            if [[ -n "${KOG_CPP_ROOT:-}" ]]; then
-                cd "$KOG_CPP_ROOT"
+            if [[ -n "${INF_CPP_ROOT:-}" ]]; then
+                cd "$INF_CPP_ROOT"
             fi
             cmake --preset "$preset"
             cmake --build --preset "${preset}"
@@ -188,7 +188,7 @@ coverage_build() {
         # macOS build from non-macOS host → use macBuilder
         echo "[coverage_build] Remote macOS build via macBuilder"
         source "$SCRIPT_DIR/macos_remote_build.sh"
-        kog_remote_build_macos "$preset" "Debug"
+        inf_remote_build_macos "$preset" "Debug"
     elif [[ "$target_platform" == "linux" ]]; then
         # Linux build from non-Linux host → use Docker
         if command -v docker >/dev/null 2>&1; then
@@ -214,7 +214,7 @@ coverage_build() {
 # ─────────────────────────────────────────────────────────────────────────────
 coverage_build_linux_via_docker() {
     local preset="${1:-linux-ninja-clang-coverage}"
-    local cpp_root="${KOG_CPP_ROOT:-$(pwd)/src/cpp}"
+    local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
     local container_name="kano-git-coverage-$$"
     local docker_image="ubuntu:24.04"
 
@@ -245,14 +245,14 @@ coverage_build_linux_via_docker() {
     }
 
     # Copy build output back to host
-    docker cp "$container_name:/workspace/src/cpp/out" "$KOG_COVERAGE_ROOT/linux-out" 2>&1
-    docker cp "$container_name:/workspace/src/cpp/_deps" "$KOG_COVERAGE_ROOT/linux-deps" 2>&1 || true
+    docker cp "$container_name:/workspace/src/cpp/out" "$INF_COVERAGE_ROOT/linux-out" 2>&1
+    docker cp "$container_name:/workspace/src/cpp/_deps" "$INF_COVERAGE_ROOT/linux-deps" 2>&1 || true
 
     # Cleanup
     docker rm -f "$container_name" 2>/dev/null
 
     echo "[coverage_build_linux_docker] Done."
-    echo "[coverage_build_linux_docker] Build output copied to: $KOG_COVERAGE_ROOT/linux-out"
+    echo "[coverage_build_linux_docker] Build output copied to: $INF_COVERAGE_ROOT/linux-out"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -314,9 +314,9 @@ coverage_run_tests() {
     fi
 
     # Determine binary path from preset
-    # Note: Linux Docker builds copy output to $KOG_COVERAGE_ROOT/linux-out/
+    # Note: Linux Docker builds copy output to $INF_COVERAGE_ROOT/linux-out/
     local binary_dir=""
-    local cpp_root="${KOG_CPP_ROOT:-$(pwd)/src/cpp}"
+    local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
     local binary_path=""
 
     case "$preset" in
@@ -325,9 +325,9 @@ coverage_run_tests() {
             binary_path="$cpp_root/$binary_dir/$test_binary"
             ;;
         linux-*)
-            # Check if Docker build was used (output copied to $KOG_COVERAGE_ROOT/linux-out)
-            if [[ -d "$KOG_COVERAGE_ROOT/linux-out/bin/${preset}" ]]; then
-                binary_path="$KOG_COVERAGE_ROOT/linux-out/bin/${preset}/$test_binary"
+            # Check if Docker build was used (output copied to $INF_COVERAGE_ROOT/linux-out)
+            if [[ -d "$INF_COVERAGE_ROOT/linux-out/bin/${preset}" ]]; then
+                binary_path="$INF_COVERAGE_ROOT/linux-out/bin/${preset}/$test_binary"
             else
                 binary_dir="out/bin/${preset}"
                 binary_path="$cpp_root/$binary_dir/$test_binary"
@@ -345,21 +345,21 @@ coverage_run_tests() {
     fi
 
     echo "[coverage_run_tests] Binary: $binary_path"
-    echo "[coverage_run_tests] Profile output: $KOG_COVERAGE_PROFRAW_DIR"
+    echo "[coverage_run_tests] Profile output: $INF_COVERAGE_PROFRAW_DIR"
 
     # Clean old profraw files
-    rm -f "$KOG_COVERAGE_PROFRAW_DIR"/*.profraw 2>/dev/null || true
+    rm -f "$INF_COVERAGE_PROFRAW_DIR"/*.profraw 2>/dev/null || true
 
     # Set LLVM_PROFILE_FILE and run
-    export LLVM_PROFILE_FILE="$KOG_COVERAGE_PROFRAW_DIR/%m.profraw"
+    export LLVM_PROFILE_FILE="$INF_COVERAGE_PROFRAW_DIR/%m.profraw"
 
     (
         cd "$cpp_root"
         "$binary_path"
     )
 
-    echo "[coverage_run_tests] Tests complete. Profile data in: $KOG_COVERAGE_PROFRAW_DIR"
-    echo "[coverage_run_tests] Found: $(find "$KOG_COVERAGE_PROFRAW_DIR" -name "*.profraw" 2>/dev/null | wc -l) .profraw files"
+    echo "[coverage_run_tests] Tests complete. Profile data in: $INF_COVERAGE_PROFRAW_DIR"
+    echo "[coverage_run_tests] Found: $(find "$INF_COVERAGE_PROFRAW_DIR" -name "*.profraw" 2>/dev/null | wc -l) .profraw files"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -370,7 +370,7 @@ coverage_run_tests() {
 #          coverage_merge custom.profdata
 # ─────────────────────────────────────────────────────────────────────────────
 coverage_merge() {
-    local output_file="${1:-$KOG_COVERAGE_PROFDATA}"
+    local output_file="${1:-$INF_COVERAGE_PROFDATA}"
     local env_info
     local platform
     local compiler_id
@@ -405,10 +405,10 @@ coverage_merge() {
         local -a profraw_files=()
         while IFS= read -r -d '' file; do
             profraw_files+=("$file")
-        done < <(find "$KOG_COVERAGE_PROFRAW_DIR" -name "*.profraw" -type f -print0 2>/dev/null || true)
+        done < <(find "$INF_COVERAGE_PROFRAW_DIR" -name "*.profraw" -type f -print0 2>/dev/null || true)
 
         if [[ ${#profraw_files[@]} -eq 0 ]]; then
-            echo "[coverage_merge] WARNING: No .profraw files found in $KOG_COVERAGE_PROFRAW_DIR" >&2
+            echo "[coverage_merge] WARNING: No .profraw files found in $INF_COVERAGE_PROFRAW_DIR" >&2
             echo "[coverage_merge] Did you run coverage_run_tests first?" >&2
             return 1
         fi
@@ -495,7 +495,7 @@ coverage_report() {
         esac
     fi
 
-    local cpp_root="${KOG_CPP_ROOT:-$(pwd)/src/cpp}"
+    local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
     local binary_dir="out/bin/${preset}"
     local binary_path="$cpp_root/$binary_dir/$test_binary"
 
@@ -504,8 +504,8 @@ coverage_report() {
         return 1
     fi
 
-    if [[ ! -f "$KOG_COVERAGE_PROFDATA" ]]; then
-        echo "[coverage_report] ERROR: Merged profile not found: $KOG_COVERAGE_PROFDATA" >&2
+    if [[ ! -f "$INF_COVERAGE_PROFDATA" ]]; then
+        echo "[coverage_report] ERROR: Merged profile not found: $INF_COVERAGE_PROFDATA" >&2
         echo "[coverage_report] Run coverage_merge first." >&2
         return 1
     fi
@@ -526,13 +526,13 @@ coverage_report() {
         fi
 
         # HTML report
-        mkdir -p "$KOG_COVERAGE_HTML_DIR"
+        mkdir -p "$INF_COVERAGE_HTML_DIR"
         echo "[coverage_report] Generating HTML report..."
         "$llvm_cov" show \
             "$binary_path" \
-            -instr-profile="$KOG_COVERAGE_PROFDATA" \
+            -instr-profile="$INF_COVERAGE_PROFDATA" \
             --format=html \
-            --output-dir="$KOG_COVERAGE_HTML_DIR" \
+            --output-dir="$INF_COVERAGE_HTML_DIR" \
             --ignore-filename-regex="_deps|catch2|ftxui|thirdparty|build|\.vcpkg" 2>&1 || {
             echo "[coverage_report] WARNING: Some files not found (normal for deps)"
         }
@@ -542,15 +542,15 @@ coverage_report() {
         echo "[coverage_report] Text summary:"
         "$llvm_cov" report \
             "$binary_path" \
-            -instr-profile="$KOG_COVERAGE_PROFDATA" \
+            -instr-profile="$INF_COVERAGE_PROFDATA" \
             --ignore-filename-regex="_deps|catch2|ftxui|thirdparty|build|\.vcpkg" 2>&1 || true
 
         echo ""
-        echo "[coverage_report] HTML report: $KOG_COVERAGE_HTML_DIR/index.html"
+        echo "[coverage_report] HTML report: $INF_COVERAGE_HTML_DIR/index.html"
 
     elif [[ "$compiler_id" == "GNU" ]]; then
         echo "[coverage_report] Use gcov to generate coverage reports from .gcda files"
-        echo "[coverage_report] gcda files in: $KOG_COVERAGE_PROFRAW_DIR"
+        echo "[coverage_report] gcda files in: $INF_COVERAGE_PROFRAW_DIR"
 
     elif [[ "$compiler_id" == "MSVC" ]]; then
         echo "[coverage_report] MSVC coverage data in build directory"
@@ -582,7 +582,7 @@ coverage_all() {
     echo "  Coverage Complete"
     echo "========================================"
     echo "Reports:"
-    echo "  HTML: $KOG_COVERAGE_HTML_DIR/index.html"
+    echo "  HTML: $INF_COVERAGE_HTML_DIR/index.html"
     echo "  Summary: Run 'coverage_report' for text output"
 }
 
@@ -600,10 +600,10 @@ coverage_info() {
     echo "llvm-cov path: ${env_info##*:}"
     echo ""
     echo "Directories:"
-    echo "  Coverage Root: $KOG_COVERAGE_ROOT"
-    echo "  Profraw Dir:  $KOG_COVERAGE_PROFRAW_DIR"
-    echo "  Merged Data:  $KOG_COVERAGE_PROFDATA"
-    echo "  HTML Output:  $KOG_COVERAGE_HTML_DIR"
+    echo "  Coverage Root: $INF_COVERAGE_ROOT"
+    echo "  Profraw Dir:  $INF_COVERAGE_PROFRAW_DIR"
+    echo "  Merged Data:  $INF_COVERAGE_PROFDATA"
+    echo "  HTML Output:  $INF_COVERAGE_HTML_DIR"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -656,9 +656,9 @@ _coverage_main() {
             echo "  $0 report"
             echo ""
             echo "Environment Variables:"
-            echo "  KOG_COVERAGE_ROOT    Base directory (default: build/coverage)"
-            echo "  KOG_BUILD_ROOT      Build root directory"
-            echo "  KOG_CPP_ROOT        C++ source root"
+            echo "  INF_COVERAGE_ROOT    Base directory (default: build/coverage)"
+            echo "  INF_BUILD_ROOT      Build root directory"
+            echo "  INF_CPP_ROOT        C++ source root"
             ;;
         "")
             echo "Error: No command specified" >&2

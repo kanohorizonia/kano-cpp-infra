@@ -6,7 +6,7 @@
 # overrides (e.g. LLVM prefix, CMAKE_OSX_ARCHITECTURES, remote macBuilder).
 #
 # Usage:
-#   KOG_CPP_ROOT=<src/cpp-root> bash <infra>/scripts/mac/native-build.sh \
+#   INF_CPP_ROOT=<src/cpp-root> bash <infra>/scripts/mac/native-build.sh \
 #       <configure-preset> <build-preset>
 #
 # Consumers with custom LLVM/SDK logic (like git-master) should keep their
@@ -16,11 +16,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export KOG_CPP_ROOT="${KOG_CPP_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+export INF_CPP_ROOT="${INF_CPP_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 
 # Source infra's generic unix preset runner (provides kano_cpp_run_unix_preset)
 # shellcheck disable=SC1091
-source "${SCRIPT_DIR}/../common/unix_preset_build.sh"
+source "${SCRIPT_DIR}/../../lib/unix_preset_build.sh"
 
-export KOG_BUILD_USE_LLVM=1
-kano_cpp_run_unix_preset "${1:-macos-ninja-clang}" "${2:-macos-ninja-clang-debug}" KOG
+export INF_BUILD_USE_LLVM=1
+kano_cpp_run_unix_preset "${1:-macos-ninja-clang}" "${2:-macos-ninja-clang-debug}" INF

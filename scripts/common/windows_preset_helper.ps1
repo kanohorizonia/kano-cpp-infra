@@ -257,8 +257,8 @@ function Prepare-SubstRoot([string]$InRoot, [string]$InPreset, [string]$InPrefer
     $modeNorm = "auto"
   }
   $pathLimit = 240
-  if ($env:KOG_WINDOWS_PATH_LIMIT -match "^\d+$") {
-    $parsed = [int]$env:KOG_WINDOWS_PATH_LIMIT
+  if ($env:INF_WINDOWS_PATH_LIMIT -match "^\d+$") {
+    $parsed = [int]$env:INF_WINDOWS_PATH_LIMIT
     if ($parsed -gt 0) {
       $pathLimit = $parsed
     }
@@ -387,10 +387,10 @@ function Get-CMakeInputsFingerprint([string]$InRoot) {
   }
 
   $launcherFingerprintParts = @(
-    "KOG_COMPILER_LAUNCHER_RESOLVED=$($env:KOG_COMPILER_LAUNCHER_RESOLVED)",
+    "INF_COMPILER_LAUNCHER_RESOLVED=$($env:INF_COMPILER_LAUNCHER_RESOLVED)",
     "SCCACHE_DIR=$($env:SCCACHE_DIR)",
     "CCACHE_DIR=$($env:CCACHE_DIR)",
-    "KOG_CMAKE_CACHE_ARGS_JSON=$($env:KOG_CMAKE_CACHE_ARGS_JSON)"
+    "INF_CMAKE_CACHE_ARGS_JSON=$($env:INF_CMAKE_CACHE_ARGS_JSON)"
   )
   foreach ($part in $launcherFingerprintParts) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($part)
@@ -405,14 +405,14 @@ function Get-CMakeInputsFingerprint([string]$InRoot) {
 }
 
 function Get-AdditionalCMakeCacheArguments() {
-  if ([string]::IsNullOrWhiteSpace($env:KOG_CMAKE_CACHE_ARGS_JSON)) {
+  if ([string]::IsNullOrWhiteSpace($env:INF_CMAKE_CACHE_ARGS_JSON)) {
     return @()
   }
 
   try {
-    $parsed = $env:KOG_CMAKE_CACHE_ARGS_JSON | ConvertFrom-Json -ErrorAction Stop
+    $parsed = $env:INF_CMAKE_CACHE_ARGS_JSON | ConvertFrom-Json -ErrorAction Stop
   } catch {
-    Write-Error ("Invalid KOG_CMAKE_CACHE_ARGS_JSON: {0}" -f $_.Exception.Message)
+    Write-Error ("Invalid INF_CMAKE_CACHE_ARGS_JSON: {0}" -f $_.Exception.Message)
     exit 4
   }
 
@@ -490,7 +490,7 @@ function Test-CompilerLauncherMatchesCache([string]$InBuildDir) {
     return $false
   }
 
-  $expectedLauncher = $env:KOG_COMPILER_LAUNCHER_RESOLVED
+  $expectedLauncher = $env:INF_COMPILER_LAUNCHER_RESOLVED
   $cachedCLauncher = Get-CMakeCacheValue -InCacheFile $cacheFile -InKey "CMAKE_C_COMPILER_LAUNCHER"
   $cachedCxxLauncher = Get-CMakeCacheValue -InCacheFile $cacheFile -InKey "CMAKE_CXX_COMPILER_LAUNCHER"
 
@@ -512,7 +512,7 @@ function Set-StoredConfigureFingerprint([string]$InBuildDir, [string]$InFingerpr
 }
 
 function Get-CompilerLauncherCacheKind() {
-  $resolved = $env:KOG_COMPILER_LAUNCHER_RESOLVED
+  $resolved = $env:INF_COMPILER_LAUNCHER_RESOLVED
   if ([string]::IsNullOrWhiteSpace($resolved)) {
     return ""
   }
@@ -549,7 +549,7 @@ function Resolve-CommandExecutablePath([string]$CommandValue) {
 }
 
 function Get-EffectiveCompilerLauncherPath() {
-  $resolved = $env:KOG_COMPILER_LAUNCHER_RESOLVED
+  $resolved = $env:INF_COMPILER_LAUNCHER_RESOLVED
   if ([string]::IsNullOrWhiteSpace($resolved)) {
     return ""
   }
@@ -617,17 +617,17 @@ function Format-CMakeCacheArgument([string]$Name, [string]$Value) {
 function Write-CompilerCacheSummary([string]$Phase, [string]$BuildDir = "") {
   $kind = Get-CompilerLauncherCacheKind
   if ([string]::IsNullOrWhiteSpace($kind)) {
-    if ($env:KOG_FASTBUILD_ENABLED -eq "1") {
+    if ($env:INF_FASTBUILD_ENABLED -eq "1") {
       $dir = $env:FASTBUILD_CACHE_PATH
       if ([string]::IsNullOrWhiteSpace($dir) -and -not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
         $dir = Join-Path $env:USERPROFILE ".kano\cache\fastbuild"
       }
       Write-Host ("[launcher][compiler-cache][{0}] kind=fastbuild dir={1}" -f $Phase, $dir)
-      if ((-not [string]::IsNullOrWhiteSpace($env:KOG_FASTBUILD_EXECUTABLE)) -and (-not [string]::IsNullOrWhiteSpace($BuildDir))) {
+      if ((-not [string]::IsNullOrWhiteSpace($env:INF_FASTBUILD_EXECUTABLE)) -and (-not [string]::IsNullOrWhiteSpace($BuildDir))) {
         $bffPath = Join-Path $BuildDir "fbuild.bff"
         try {
           if (Test-Path -LiteralPath $bffPath) {
-            & $env:KOG_FASTBUILD_EXECUTABLE -config $bffPath -cacheinfo
+            & $env:INF_FASTBUILD_EXECUTABLE -config $bffPath -cacheinfo
           }
         } catch {
           Write-Host ("[launcher][compiler-cache][{0}] unable to read FASTBuild cache info: {1}" -f $Phase, $_.Exception.Message)
@@ -704,18 +704,18 @@ function Run-Preset([string]$InRoot,
       $configureCommand += " " + $additionalArgument
     }
     $launcherPath = Get-EffectiveCompilerLauncherPath
-    $isFastBuild = ($env:KOG_FASTBUILD_ENABLED -eq "1")
+    $isFastBuild = ($env:INF_FASTBUILD_ENABLED -eq "1")
     if ($isFastBuild) {
       if (-not [string]::IsNullOrWhiteSpace($env:FASTBUILD_CACHE_PATH)) {
         $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_FASTBUILD_CACHE_PATH" -Value (Resolve-AbsoluteWindowsPath $env:FASTBUILD_CACHE_PATH))
       }
-      if (-not [string]::IsNullOrWhiteSpace($env:KOG_FASTBUILD_EXECUTABLE)) {
-        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM" -Value (Resolve-AbsoluteWindowsPath $env:KOG_FASTBUILD_EXECUTABLE))
-        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_FASTBUILD_EXECUTABLE" -Value (Resolve-AbsoluteWindowsPath $env:KOG_FASTBUILD_EXECUTABLE))
+      if (-not [string]::IsNullOrWhiteSpace($env:INF_FASTBUILD_EXECUTABLE)) {
+        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM" -Value (Resolve-AbsoluteWindowsPath $env:INF_FASTBUILD_EXECUTABLE))
+        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_FASTBUILD_EXECUTABLE" -Value (Resolve-AbsoluteWindowsPath $env:INF_FASTBUILD_EXECUTABLE))
       }
     } elseif (-not [string]::IsNullOrWhiteSpace($launcherPath)) {
-      $env:KOG_COMPILER_LAUNCHER = $launcherPath
-      $configureCommand += " " + (Format-CMakeCacheArgument -Name "KOG_COMPILER_LAUNCHER" -Value $launcherPath)
+      $env:INF_COMPILER_LAUNCHER = $launcherPath
+      $configureCommand += " " + (Format-CMakeCacheArgument -Name "INF_COMPILER_LAUNCHER" -Value $launcherPath)
       $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_C_COMPILER_LAUNCHER" -Value $launcherPath)
       $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_CXX_COMPILER_LAUNCHER" -Value $launcherPath)
     }
@@ -735,9 +735,9 @@ function Run-Preset([string]$InRoot,
   # Always run build (this is the incremental part)
   Write-CompilerCacheSummary "before-build" $buildDir
   $buildCommand = "cmake --build --preset $InBuildPreset"
-  if ($env:KOG_FASTBUILD_ENABLED -eq "1") {
+  if ($env:INF_FASTBUILD_ENABLED -eq "1") {
     $buildCommand += " -- -cache"
-    if ($env:KOG_FASTBUILD_DISTRIBUTED -eq "1") {
+    if ($env:INF_FASTBUILD_DISTRIBUTED -eq "1") {
       $buildCommand += " -dist"
     }
   }
@@ -781,18 +781,18 @@ function Configure-Preset([string]$InRoot,
       $configureCommand += " " + $additionalArgument
     }
     $launcherPath = Get-EffectiveCompilerLauncherPath
-    $isFastBuild = ($env:KOG_FASTBUILD_ENABLED -eq "1")
+    $isFastBuild = ($env:INF_FASTBUILD_ENABLED -eq "1")
     if ($isFastBuild) {
       if (-not [string]::IsNullOrWhiteSpace($env:FASTBUILD_CACHE_PATH)) {
         $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_FASTBUILD_CACHE_PATH" -Value (Resolve-AbsoluteWindowsPath $env:FASTBUILD_CACHE_PATH))
       }
-      if (-not [string]::IsNullOrWhiteSpace($env:KOG_FASTBUILD_EXECUTABLE)) {
-        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM" -Value (Resolve-AbsoluteWindowsPath $env:KOG_FASTBUILD_EXECUTABLE))
-        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_FASTBUILD_EXECUTABLE" -Value (Resolve-AbsoluteWindowsPath $env:KOG_FASTBUILD_EXECUTABLE))
+      if (-not [string]::IsNullOrWhiteSpace($env:INF_FASTBUILD_EXECUTABLE)) {
+        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM" -Value (Resolve-AbsoluteWindowsPath $env:INF_FASTBUILD_EXECUTABLE))
+        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_FASTBUILD_EXECUTABLE" -Value (Resolve-AbsoluteWindowsPath $env:INF_FASTBUILD_EXECUTABLE))
       }
     } elseif (-not [string]::IsNullOrWhiteSpace($launcherPath)) {
-      $env:KOG_COMPILER_LAUNCHER = $launcherPath
-      $configureCommand += " " + (Format-CMakeCacheArgument -Name "KOG_COMPILER_LAUNCHER" -Value $launcherPath)
+      $env:INF_COMPILER_LAUNCHER = $launcherPath
+      $configureCommand += " " + (Format-CMakeCacheArgument -Name "INF_COMPILER_LAUNCHER" -Value $launcherPath)
       $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_C_COMPILER_LAUNCHER" -Value $launcherPath)
       $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_CXX_COMPILER_LAUNCHER" -Value $launcherPath)
     }
