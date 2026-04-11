@@ -47,9 +47,9 @@ kano_cpp_infra_matrix_default_test_report_script() {
   os_name="$(kano_cpp_infra_matrix_host_os)"
   arch="$(kano_cpp_infra_matrix_arch)"
   case "$os_name" in
-    win64) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/platform/win64/windows_preset_build.sh" ;;
-    mac) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/platform/mac/native-build.sh" ;;
-    *) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/platform/linux/native-build.sh" ;;
+    win64) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/lib/test_report.sh" ;;
+    mac) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/lib/test_report.sh" ;;
+    *) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/lib/test_report.sh" ;;
   esac
 }
 
@@ -82,9 +82,9 @@ kano_cpp_infra_matrix_default_coverage_report_script() {
   arch="$(kano_cpp_infra_matrix_arch)"
   case "$os_name" in
     win64)
-      printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/platform/win64/windows_preset_build.sh"
+      printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/lib/coverage_report.sh"
       ;;
-    mac) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/platform/mac/native-build.sh" ;;
-    *) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/platform/linux/native-build.sh" ;;
+    mac) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/lib/coverage_report.sh" ;;
+    *) printf '%s\n' "$KANO_CPP_INFRA_MATRIX_BASE/lib/coverage_report.sh" ;;
   esac
 }
