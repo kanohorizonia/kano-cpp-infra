@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-. "$SCRIPT_DIR/../orchestration/matrix.sh"
+. "$SCRIPT_DIR/../lib/matrix.sh"
 
 backend="${1:-default}"
 if [[ "$#" -gt 0 ]]; then
