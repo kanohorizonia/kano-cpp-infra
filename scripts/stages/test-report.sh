@@ -15,18 +15,12 @@ INFRA_BASE_DIR="$(cd -- "$INFRA_SCRIPTS_DIR/.." && pwd)"
 CPP_ROOT="$(cd -- "$INFRA_BASE_DIR/../.." && pwd)"
 REPO_ROOT="$(cd -- "$CPP_ROOT/../.." && pwd)"
 
-# ─── Infer KANO_CPP_INFRA_CPP_ROOT ─────────────────────────────────────────────
-# Required by lib/report_skill_adapter.sh → report_skill_load()
 export KANO_CPP_INFRA_CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-${CPP_ROOT}}"
 export KANO_CPP_INFRA_REPO_ROOT="${KANO_CPP_INFRA_REPO_ROOT:-${REPO_ROOT}}"
 
 # ─── Detect preset from build output layout ─────────────────────────────────────
-# Binary dir pattern: out/bin/<preset>/<config>/
-# Resolve the preset from whichever bin directory actually exists.
 detect_preset_from_bin_dir() {
     local cpp_root="$1"
-    local bin_subdir
-
     for bin_subdir in "$cpp_root/out/bin/"*; do
         [[ -d "$bin_subdir" ]] || continue
         local preset_name
@@ -46,15 +40,24 @@ if [[ -z "$DETECTED_PRESET" ]]; then
     exit 1
 fi
 
-# ─── Infer KANO_REPORT_SLUG ────────────────────────────────────────────────────
-# Default to <preset>-release; caller can still override via env.
-export KANO_REPORT_SLUG="${KANO_REPORT_SLUG:-${DETECTED_PRESET}-release}"
+# ─── Locate config subdir (debug/release/relwithdebinfo) with test binaries ────
+resolve_config_dir() {
+    local preset_bin_dir="$1"
+    for config_dir in "$preset_bin_dir"/debug "$preset_bin_dir"/release \
+                     "$preset_bin_dir"/relwithdebinfo "$preset_bin_dir"/minsizerel; do
+        if [[ -f "$config_dir/kano_git_cli_tests.exe" || -f "$config_dir/kano_git_cli_tests" ]]; then
+            printf '%s\n' "$config_dir"
+            return 0
+        fi
+    done
+    return 1
+}
 
-# ─── Locate test binaries ───────────────────────────────────────────────────────
-EXE_DIR="$CPP_ROOT/out/bin/${DETECTED_PRESET}/release"
+PRESET_BIN_DIR="$CPP_ROOT/out/bin/${DETECTED_PRESET}"
+EXE_DIR="$(resolve_config_dir "$PRESET_BIN_DIR")"
 
-if [[ ! -d "$EXE_DIR" ]]; then
-    echo "[ERROR] Test binary directory not found: $EXE_DIR" >&2
+if [[ -z "$EXE_DIR" ]]; then
+    echo "[ERROR] No test binaries found under $PRESET_BIN_DIR/{debug,release,relwithdebinfo}" >&2
     echo "[ERROR] Run 'pixi run build' first." >&2
     exit 1
 fi
@@ -71,8 +74,11 @@ if [[ ! -f "$TUI_TEST" ]]; then
     exit 1
 fi
 
+# ─── Derive KANO_REPORT_SLUG from actual config subdir ─────────────────────────
+CONFIG_SUBDIR="$(basename "$EXE_DIR")"
+export KANO_REPORT_SLUG="${KANO_REPORT_SLUG:-${DETECTED_PRESET}-${CONFIG_SUBDIR}}"
+
 # ─── Infer KANO_TEST_COMMAND ────────────────────────────────────────────────────
-# Runs both test binaries sequentially; captures exit code.
 export KANO_TEST_COMMAND="${KANO_TEST_COMMAND:-"$CLI_TEST && $TUI_TEST"}"
 
 exec bash "$report_script" "$@"
