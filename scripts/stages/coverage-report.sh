@@ -10,5 +10,5 @@ if [[ "$#" -gt 0 ]]; then
   shift
 fi
 
-coverage_script="$(inf_matrix_default_coverage_report_script "$backend")"
+coverage_script="$(kano_cpp_infra_matrix_default_coverage_report_script "$backend")"
 exec bash "$coverage_script" "$@"
