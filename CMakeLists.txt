@@ -10,6 +10,7 @@ add_subdirectory(code/systems/kano_infra_platform)
 add_subdirectory(code/systems/kano_infra_process)
 add_subdirectory(code/systems/kano_infra_diagnostics)
 add_subdirectory(code/systems/kano_infra_self)
+add_subdirectory(code/systems/kano_infra_timing)
 
 add_library(kano_infra_all INTERFACE)
 target_link_libraries(kano_infra_all INTERFACE
@@ -19,6 +20,7 @@ target_link_libraries(kano_infra_all INTERFACE
     KanoInfra::process
     KanoInfra::diagnostics
     KanoInfra::self
+    KanoInfra::timing
 )
 add_library(KanoInfra::All ALIAS kano_infra_all)
 
@@ -31,6 +33,7 @@ install(TARGETS
     kano_infra_process
     kano_infra_diagnostics
     kano_infra_self
+    kano_infra_timing
     kano_infra_all
     EXPORT KanoInfraTargets
 )
