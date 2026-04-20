@@ -220,18 +220,18 @@ kano_cpp_infra_resolve_self_config_value() {
   printf '%s' "$value"
 }
 
-kano_cpp_infra_apply_self_build_config() {
+kano_cpp_apply_self_build_config() {
   unset KANO_CPP_INFRA_COMPILER_LAUNCHER_RESOLVED || true
-  if [[ -z "${KANO_CPP_INFRA_COMPILER_LAUNCHER:-}" ]]; then
+  if [[ -z "${KOG_COMPILER_LAUNCHER:-}" ]]; then
     local configured_launcher=""
     configured_launcher="$(kano_cpp_infra_resolve_self_config_value "compiler_launcher")"
     if [[ -n "$configured_launcher" ]]; then
-      export KANO_CPP_INFRA_COMPILER_LAUNCHER="$configured_launcher"
+      export KOG_COMPILER_LAUNCHER="$configured_launcher"
     fi
   fi
 
   local resolved_launcher=""
-  if resolved_launcher="$(_kano_cpp_infra_select_compiler_launcher "${KANO_CPP_INFRA_COMPILER_LAUNCHER:-}")"; then
+  if resolved_launcher="$(_kano_cpp_infra_select_compiler_launcher "${KOG_COMPILER_LAUNCHER:-}")"; then
     local launcher_name
     launcher_name="$(_kano_cpp_infra_lower "$(basename "$resolved_launcher" .exe)")"
     export KANO_CPP_INFRA_COMPILER_LAUNCHER_RESOLVED="$resolved_launcher"
@@ -260,7 +260,7 @@ kano_cpp_infra_apply_self_build_config() {
   fi
 }
 
-kano_cpp_infra_collect_build_metadata() {
+kano_cpp_collect_build_metadata() {
   local root="${KANO_CPP_INFRA_CPP_ROOT:-$(pwd)}"
   local vcs="unknown"
   local branch="unknown"

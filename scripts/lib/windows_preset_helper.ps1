@@ -94,7 +94,11 @@ function Get-AdditionalCMakeCacheArguments {
     $buildPrefix = "KOB"
   }
 
-  $launcher = [Environment]::GetEnvironmentVariable("${buildPrefix}_COMPILER_LAUNCHER")
+  $launcher = [Environment]::GetEnvironmentVariable("KOG_COMPILER_LAUNCHER")
+  if ([string]::IsNullOrWhiteSpace($launcher)) {
+    $launcher = [Environment]::GetEnvironmentVariable("${buildPrefix}_COMPILER_LAUNCHER")
+  }
+  
   if (-not [string]::IsNullOrWhiteSpace($launcher)) {
     [void]$arguments.Add((Format-CMakeCacheArgument -Name "CMAKE_C_COMPILER_LAUNCHER" -Value $launcher))
     [void]$arguments.Add((Format-CMakeCacheArgument -Name "CMAKE_CXX_COMPILER_LAUNCHER" -Value $launcher))
