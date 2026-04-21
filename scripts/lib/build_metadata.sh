@@ -227,6 +227,8 @@ kano_cpp_apply_self_build_config() {
     configured_launcher="$(kano_cpp_infra_resolve_self_config_value "compiler_launcher")"
     if [[ -n "$configured_launcher" ]]; then
       export KOG_COMPILER_LAUNCHER="$configured_launcher"
+    else
+      export KOG_COMPILER_LAUNCHER="auto"
     fi
   fi
 
@@ -254,8 +256,8 @@ kano_cpp_apply_self_build_config() {
       echo "[launcher][compiler-cache][info] launcher=$resolved_launcher" >&2
     fi
   else
-    if [[ -n "${KANO_CPP_INFRA_COMPILER_LAUNCHER:-}" && "$(_kano_cpp_infra_lower "${KANO_CPP_INFRA_COMPILER_LAUNCHER}")" != "none" ]]; then
-      echo "[launcher][compiler-cache][warn] requested launcher unavailable: ${KANO_CPP_INFRA_COMPILER_LAUNCHER}" >&2
+    if [[ -n "${KOG_COMPILER_LAUNCHER:-}" && "$(_kano_cpp_infra_lower "${KOG_COMPILER_LAUNCHER}")" != "none" ]]; then
+      echo "[launcher][compiler-cache][warn] requested launcher unavailable: ${KOG_COMPILER_LAUNCHER}" >&2
     fi
   fi
 }
