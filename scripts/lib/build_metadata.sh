@@ -1,6 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ANSI Colors
+_KOG_CLR_RESET='\033[0m'
+_KOG_CLR_BOLD_GREEN='\033[1;32m'
+_KOG_CLR_BOLD_YELLOW='\033[1;33m'
+_KOG_CLR_BOLD_CYAN='\033[1;36m'
+
+_kano_cpp_infra_color_enabled() {
+  if [[ -n "${NO_COLOR:-}" || -n "${KOG_NO_COLOR:-}" ]]; then
+    return 1
+  fi
+  if [[ -t 2 ]]; then
+    return 0
+  fi
+  return 1
+}
+
+_kano_cpp_infra_log_prefix() {
+  local prefix="$1"
+  local color="$2"
+  if _kano_cpp_infra_color_enabled; then
+    printf "${color}${prefix}${_KOG_CLR_RESET}"
+  else
+    printf "${prefix}"
+  fi
+}
+
 _kano_cpp_infra_trim() {
   local value="$1"
   value="${value#"${value%%[![:space:]]*}"}"
@@ -98,7 +124,7 @@ kano_cpp_infra_apply_fastbuild_env() {
     mkdir -p "$FASTBUILD_TEMP_PATH" >/dev/null 2>&1 || true
   fi
 
-  echo "[launcher][fastbuild][info] exe=${KANO_CPP_INFRA_FASTBUILD_EXECUTABLE:-unknown} cache_dir=${FASTBUILD_CACHE_PATH:-unknown} brokerage=${FASTBUILD_BROKERAGE_PATH:-unknown} cache_mode=${FASTBUILD_CACHE_MODE:-unknown}" >&2
+  echo "$(_kano_cpp_infra_log_prefix "[launcher]" "$_KOG_CLR_BOLD_GREEN")[fastbuild][info] exe=${KANO_CPP_INFRA_FASTBUILD_EXECUTABLE:-unknown} cache_dir=${FASTBUILD_CACHE_PATH:-unknown} brokerage=${FASTBUILD_BROKERAGE_PATH:-unknown} cache_mode=${FASTBUILD_CACHE_MODE:-unknown}" >&2
 }
 
 _kano_cpp_infra_select_compiler_launcher() {
@@ -245,19 +271,19 @@ kano_cpp_apply_self_build_config() {
         export SCCACHE_DIR="$cache_dir"
       fi
       mkdir -p "${SCCACHE_DIR:-$cache_dir}" >/dev/null 2>&1 || true
-      echo "[launcher][compiler-cache][info] launcher=$resolved_launcher cache_dir=${SCCACHE_DIR:-unknown}" >&2
+      echo "$(_kano_cpp_infra_log_prefix "[launcher]" "$_KOG_CLR_BOLD_GREEN")[compiler-cache][info] launcher=$resolved_launcher cache_dir=${SCCACHE_DIR:-unknown}" >&2
     elif [[ "$launcher_name" == "ccache" ]]; then
       if [[ -z "${CCACHE_DIR:-}" && -n "$cache_dir" ]]; then
         export CCACHE_DIR="$cache_dir"
       fi
       mkdir -p "${CCACHE_DIR:-$cache_dir}" >/dev/null 2>&1 || true
-      echo "[launcher][compiler-cache][info] launcher=$resolved_launcher cache_dir=${CCACHE_DIR:-unknown}" >&2
+      echo "$(_kano_cpp_infra_log_prefix "[launcher]" "$_KOG_CLR_BOLD_GREEN")[compiler-cache][info] launcher=$resolved_launcher cache_dir=${CCACHE_DIR:-unknown}" >&2
     else
-      echo "[launcher][compiler-cache][info] launcher=$resolved_launcher" >&2
+      echo "$(_kano_cpp_infra_log_prefix "[launcher]" "$_KOG_CLR_BOLD_GREEN")[compiler-cache][info] launcher=$resolved_launcher" >&2
     fi
   else
     if [[ -n "${KOG_COMPILER_LAUNCHER:-}" && "$(_kano_cpp_infra_lower "${KOG_COMPILER_LAUNCHER}")" != "none" ]]; then
-      echo "[launcher][compiler-cache][warn] requested launcher unavailable: ${KOG_COMPILER_LAUNCHER}" >&2
+      echo "$(_kano_cpp_infra_log_prefix "[launcher]" "$_KOG_CLR_BOLD_GREEN")[compiler-cache]($(_kano_cpp_infra_log_prefix "warn" "$_KOG_CLR_BOLD_YELLOW")) requested launcher unavailable: ${KOG_COMPILER_LAUNCHER}" >&2
     fi
   fi
 }
