@@ -195,7 +195,7 @@ private:
  *   }
  */
 #define SCOPED_TIMING_LOG(label) \
-    kano::infra::timing::ScopedTimingLog ANONYMOY_VARIABLE__(timing_log_)(label)
+    kano::infra::timing::ScopedTimingLog ANONYMOY_VARIABLE__(__LINE__)(label)
 
 /**
  * SCOPED_TIMING_LOG_WITH_ELAPSED — scoped timing + live elapsed reference
@@ -209,7 +209,7 @@ private:
  *   fmt::print("total: {:.0f}ms\n", ms);  // final value
  */
 #define SCOPED_TIMING_LOG_WITH_ELAPSED(label, out_ms_ref) \
-    kano::infra::timing::ScopedTimingLogWithElapsed ANONYMOY_VARIABLE__(timing_log_)(label, out_ms_ref)
+    kano::infra::timing::ScopedTimingLogWithElapsed ANONYMOY_VARIABLE__(__LINE__)(label, out_ms_ref)
 
 /* ---------------------------------------------------------------------------
  * Token pasting helpers for ANONYMOY_VARIABLE__
