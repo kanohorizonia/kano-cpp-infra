@@ -84,8 +84,21 @@ public:
 
     ~ScopedTimingLog() noexcept {
         const double elapsed = started_.elapsed_ms();
-        std::fprintf(dest_, "[TIMING] %.*s completed in %.2fms\n",
-                     static_cast<int>(label_.size()), label_.data(), elapsed);
+        char timeBuf[32];
+        if (elapsed < 1.0) {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fus", elapsed * 1000.0);
+        } else if (elapsed < 1000.0) {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fms", elapsed);
+        } else if (elapsed < 60000.0) {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fs", elapsed / 1000.0);
+        } else if (elapsed < 3600000.0) {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fm", elapsed / 60000.0);
+        } else {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fh", elapsed / 3600000.0);
+        }
+
+        std::fprintf(dest_, "[TIMING] %.*s completed in %s\n",
+                     static_cast<int>(label_.size()), label_.data(), timeBuf);
         std::fflush(dest_);
     }
 
@@ -132,8 +145,21 @@ public:
 
     ~ScopedTimingLogWithElapsed() noexcept {
         out_elapsed_ = started_.elapsed_ms();
-        std::fprintf(dest_, "[TIMING] %.*s completed in %.2fms\n",
-                     static_cast<int>(label_.size()), label_.data(), out_elapsed_);
+        char timeBuf[32];
+        if (out_elapsed_ < 1.0) {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fus", out_elapsed_ * 1000.0);
+        } else if (out_elapsed_ < 1000.0) {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fms", out_elapsed_);
+        } else if (out_elapsed_ < 60000.0) {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fs", out_elapsed_ / 1000.0);
+        } else if (out_elapsed_ < 3600000.0) {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fm", out_elapsed_ / 60000.0);
+        } else {
+            std::snprintf(timeBuf, sizeof(timeBuf), "%.2fh", out_elapsed_ / 3600000.0);
+        }
+
+        std::fprintf(dest_, "[TIMING] %.*s completed in %s\n",
+                     static_cast<int>(label_.size()), label_.data(), timeBuf);
         std::fflush(dest_);
     }
 
