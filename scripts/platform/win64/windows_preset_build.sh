@@ -14,6 +14,23 @@ kano_windows_build_prefix() {
   printf '%s' "${KABSD_BUILD_PREFIX:-${KANO_BUILD_PREFIX:-KANO}}"
 }
 
+_kano_windows_bootstrapPixiIfNeeded() {
+  if [[ -n "${KANO_CPP_ROOT:-${INF_CPP_ROOT:-${KOB_CPP_ROOT:-${KABSD_CPP_ROOT:-}}}}" ]]; then
+    return 0
+  fi
+  local bootstrap_script="${KANO_CPP_INFRA_MATRIX_BASE:-$(cd -- "$SCRIPT_DIR/../../.." && pwd)}/scripts/lib/pixi_bootstrap.sh"
+  if [[ -f "$bootstrap_script" ]]; then
+    # shellcheck disable=SC1090
+    source "$bootstrap_script"
+    kano_pixi_bootstrap_activate
+    local cpp_root=""
+    cpp_root="$(kano_pixi_bootstrap_cpp_root)"
+    if [[ -n "$cpp_root" ]]; then
+      export KANO_CPP_ROOT="$cpp_root"
+    fi
+  fi
+}
+
 kano_windows_cmake_var_prefix() {
   printf '%s' "${KABSD_CMAKE_VAR_PREFIX:-${KANO_CMAKE_VAR_PREFIX:-KB}}"
 }
@@ -23,6 +40,11 @@ kano_windows_cpp_root() {
     kano_cpp_root
     return 0
   fi
+  if [[ -n "${KANO_CPP_ROOT:-${INF_CPP_ROOT:-${KOB_CPP_ROOT:-${KABSD_CPP_ROOT:-}}}}" ]]; then
+    printf '%s' "${KANO_CPP_ROOT:-${INF_CPP_ROOT:-${KOB_CPP_ROOT:-${KABSD_CPP_ROOT:-}}}}"
+    return 0
+  fi
+  _kano_windows_bootstrapPixiIfNeeded
   if [[ -n "${KANO_CPP_ROOT:-${INF_CPP_ROOT:-${KOB_CPP_ROOT:-${KABSD_CPP_ROOT:-}}}}" ]]; then
     printf '%s' "${KANO_CPP_ROOT:-${INF_CPP_ROOT:-${KOB_CPP_ROOT:-${KABSD_CPP_ROOT:-}}}}"
     return 0

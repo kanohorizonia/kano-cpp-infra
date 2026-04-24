@@ -1,0 +1,155 @@
+[workspace]
+name = "kano-cpp-infra"
+channels = ["conda-forge"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+
+[dependencies]
+ccache = "*"
+cmake = ">=3.21"
+git = "*"
+ninja = ">=1.13.2,<2"
+ripgrep = "*"
+
+[target.linux-64.dependencies]
+bash = "*"
+
+[target.osx-64.dependencies]
+bash = "*"
+
+[target.osx-arm64.dependencies]
+bash = "*"
+
+# =============================================================================
+# CANONICAL SHARED-INFRA PIXI CONTRACT (src/cpp/shared/infra/)
+# =============================================================================
+# This manifest is the canonical shared Pixi entrypoint for reusable native
+# build / test / report / bootstrap flows. Consuming repos should prefer:
+#
+#   cd src/cpp/shared/infra && pixi run <task>
+#   pixi run --manifest-path src/cpp/shared/infra/pixi.toml <task>
+#
+# Repo-root pixi usage is reserved for repo-specific extension tasks only.
+# Do not move repo-specific docs / release / acceptance flows into this manifest.
+# =============================================================================
+
+[tasks]
+
+# Show toolchain versions
+env-summary = "git --version && cmake --version && ninja --version"
+
+# Package all reports (test + coverage) via kano-cpp-test-skill
+package-reports = "bash scripts/lib/package-reports-with-skill.sh"
+
+# Profiling matrices — runs a curated feature-combination matrix then renders report
+# profile-default   : launcher=none vs ccache vs sccache vs fastbuild
+# profile-launchers : launcher comparisons only
+# profile-unity     : unity=off vs full vs changed
+# profile-pgo       : baseline vs pgo
+profile-default = "bash scripts/stages/profile.sh default && bash scripts/stages/profile-report.sh default"
+profile-launchers = "bash scripts/stages/profile.sh launchers && bash scripts/stages/profile-report.sh launchers"
+profile-unity = "bash scripts/stages/profile.sh unity && bash scripts/stages/profile-report.sh unity"
+profile-pgo = "bash scripts/stages/profile.sh pgo && bash scripts/stages/profile-report.sh pgo"
+
+[target.win-64.tasks]
+# Bootstrap
+bootstrap-system = "bash scripts/platform/win64/prerequisite.ps1"
+
+# Development build (Debug preset - fast iteration)
+build-debug = "bash scripts/platform/win64/ninja-msvc-debug.sh"
+
+# Release build (optimized)
+build-release = "bash scripts/self/build.sh"
+build = "bash scripts/self/build.sh"
+rebuild = "bash scripts/self/rebuild.sh"
+
+# Coverage workflow (CI-ready)
+build-coverage = "bash scripts/stages/coverage-build.sh"
+test-coverage = "bash scripts/stages/coverage-gather.sh"
+report-coverage = "bash scripts/stages/coverage-report.sh"
+report-coverage-opencppcoverage = "bash scripts/platform/win64/ninja-msvc-coverage-build.sh"
+skill-report-coverage = "bash scripts/stages/coverage-report.sh"
+skill-report-coverage-opencppcoverage = "bash scripts/stages/coverage-report.sh opencppcoverage"
+test-report = "bash scripts/stages/test-report.sh"
+pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
+
+# Full coverage workflow: build + test + report
+coverage-all = "bash scripts/workflows/coverage-all.sh"
+
+# Tests
+quick-test = "bash ../../code/tests/run_tests.sh windows-ninja-msvc-release"
+full-test = "bash ../../code/tests/run_tests.sh windows-ninja-msvc-release --with-e2e"
+
+[target.linux-64.tasks]
+# Bootstrap
+bootstrap-system = "bash scripts/platform/linux/prerequisite.sh"
+
+# Development build (Debug preset - fast iteration)
+build-debug = "bash scripts/platform/linux/native-build.sh"
+
+# Release build (optimized)
+build-release = "bash scripts/self/build.sh"
+build = "bash scripts/self/build.sh"
+rebuild = "bash scripts/self/rebuild.sh"
+
+# Coverage workflow (CI-ready)
+build-coverage = "bash scripts/stages/coverage-build.sh"
+test-coverage = "bash scripts/stages/coverage-gather.sh"
+report-coverage = "bash scripts/stages/coverage-report.sh"
+skill-report-coverage = "bash scripts/stages/coverage-report.sh"
+test-report = "bash scripts/stages/test-report.sh"
+pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
+
+# Full coverage workflow: build + test + report
+coverage-all = "bash scripts/workflows/coverage-all.sh"
+
+# Tests
+quick-test = "bash ../../../code/tests/run_tests.sh linux-ninja-gcc-release"
+full-test = "bash ../../../code/tests/run_tests.sh linux-ninja-gcc-release --with-e2e"
+
+[target.osx-64.tasks]
+# Development build (Debug preset - fast iteration)
+build-debug = "bash scripts/platform/mac/native-build.sh"
+
+# Release build (optimized)
+build-release = "bash scripts/self/build.sh"
+build = "bash scripts/self/build.sh"
+rebuild = "bash scripts/self/rebuild.sh"
+
+# Coverage workflow (CI-ready)
+build-coverage = "bash scripts/stages/coverage-build.sh"
+test-coverage = "bash scripts/stages/coverage-gather.sh"
+report-coverage = "bash scripts/stages/coverage-report.sh"
+skill-report-coverage = "bash scripts/stages/coverage-report.sh"
+test-report = "bash scripts/stages/test-report.sh"
+pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
+
+# Full coverage workflow: build + test + report
+coverage-all = "bash scripts/workflows/coverage-all.sh"
+
+# Tests
+quick-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-x64-release"
+full-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-x64-release --with-e2e"
+
+[target.osx-arm64.tasks]
+# Development build (Debug preset - fast iteration)
+build-debug = "bash scripts/platform/mac/native-build.sh"
+
+# Release build (optimized)
+build-release = "bash scripts/self/build.sh"
+build = "bash scripts/self/build.sh"
+rebuild = "bash scripts/self/rebuild.sh"
+
+# Coverage workflow (CI-ready)
+build-coverage = "bash scripts/stages/coverage-build.sh"
+test-coverage = "bash scripts/stages/coverage-gather.sh"
+report-coverage = "bash scripts/stages/coverage-report.sh"
+skill-report-coverage = "bash scripts/stages/coverage-report.sh"
+test-report = "bash scripts/stages/test-report.sh"
+pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
+
+# Full coverage workflow: build + test + report
+coverage-all = "bash scripts/workflows/coverage-all.sh"
+
+# Tests
+quick-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-arm64-release"
+full-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-arm64-release --with-e2e"

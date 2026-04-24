@@ -145,6 +145,61 @@ function Get-AdditionalCMakeCacheArguments {
   return $arguments.ToArray()
 }
 
+function Get-PixiEnvironmentRoot([string]$ProjectRoot) {
+  # First check for infra pixi at the standard shared-infra location
+  $infraPixiRoot = Join-Path $ProjectRoot "shared\infra\.pixi\envs\default"
+  if (Test-Path -LiteralPath $infraPixiRoot) {
+    return (Resolve-Path -LiteralPath $infraPixiRoot).Path
+  }
+
+  # Fall back to walking up from ProjectRoot
+  $root = $ProjectRoot
+  while (-not [string]::IsNullOrWhiteSpace($root)) {
+    $pixiEnvRoot = Join-Path $root ".pixi\envs\default"
+    if (Test-Path -LiteralPath $pixiEnvRoot) {
+      return (Resolve-Path -LiteralPath $pixiEnvRoot).Path
+    }
+    $parentRoot = Split-Path -Parent $root
+    if ([string]::IsNullOrWhiteSpace($parentRoot) -or $parentRoot -eq $root) {
+      break
+    }
+    $root = $parentRoot
+  }
+
+  throw "pixi environment root not found from $ProjectRoot. Run './kog self install-prereq'."
+}
+
+function Get-PixiBuildToolPrefix([string]$ProjectRoot) {
+  $pixiEnvRoot = Get-PixiEnvironmentRoot -ProjectRoot $ProjectRoot
+  $candidates = @(
+    (Join-Path $pixiEnvRoot "Library\bin"),
+    (Join-Path $pixiEnvRoot "Scripts"),
+    (Join-Path $pixiEnvRoot "bin")
+  )
+
+  $resolved = New-Object System.Collections.Generic.List[string]
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate) {
+      [void]$resolved.Add((Resolve-Path -LiteralPath $candidate).Path)
+    }
+  }
+
+  if ($resolved.Count -eq 0) {
+    throw "pixi build tool environment not found under $pixiEnvRoot. Run './kog self install-prereq'."
+  }
+
+  return [string]::Join(';', $resolved)
+}
+
+function Get-PixiNinjaPath([string]$ProjectRoot) {
+  $pixiEnvRoot = Get-PixiEnvironmentRoot -ProjectRoot $ProjectRoot
+  $ninjaPath = Join-Path $pixiEnvRoot "Library\bin\ninja.exe"
+  if (-not (Test-Path -LiteralPath $ninjaPath)) {
+    throw "pixi ninja.exe not found at $ninjaPath. Run './kog self install-prereq'."
+  }
+  return (Resolve-Path -LiteralPath $ninjaPath).Path
+}
+
 function Invoke-CmdChain([string]$CmdLine) {
   cmd.exe /d /s /c $CmdLine
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -160,13 +215,16 @@ function Run-Preset {
 
   $rootPath = (Resolve-Path -LiteralPath $Root).Path
   Set-Location -LiteralPath $rootPath
+  $pixiPathPrefix = Get-PixiBuildToolPrefix -ProjectRoot $rootPath
+  $pixiNinjaPath = Get-PixiNinjaPath -ProjectRoot $rootPath
 
   $configureCommand = "cmake --preset $ConfigurePreset"
+  $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM:FILEPATH" -Value $pixiNinjaPath)
   foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
 
-  $quotedVcvars = '"' + $resolvedVcvars + '"'
-  Invoke-CmdChain ("call $quotedVcvars $Arch -vcvars_ver=$VcvarsVersion && $configureCommand")
-  Invoke-CmdChain ("call $quotedVcvars $Arch -vcvars_ver=$VcvarsVersion && cmake --build --preset $BuildPreset")
+  $vcvarsCommand = ('call "{0}" {1} -vcvars_ver={2}' -f $resolvedVcvars, $Arch, $VcvarsVersion)
+  Invoke-CmdChain ('{0} && set "PATH={1};%PATH%" && {2}' -f $vcvarsCommand, $pixiPathPrefix, $configureCommand)
+  Invoke-CmdChain ('{0} && set "PATH={1};%PATH%" && cmake --build --preset {2}' -f $vcvarsCommand, $pixiPathPrefix, $BuildPreset)
 }
 
 function Configure-Preset {
@@ -179,12 +237,15 @@ function Configure-Preset {
 
   $rootPath = (Resolve-Path -LiteralPath $Root).Path
   Set-Location -LiteralPath $rootPath
+  $pixiPathPrefix = Get-PixiBuildToolPrefix -ProjectRoot $rootPath
+  $pixiNinjaPath = Get-PixiNinjaPath -ProjectRoot $rootPath
 
   $configureCommand = "cmake --preset $ConfigurePreset"
+  $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM:FILEPATH" -Value $pixiNinjaPath)
   foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
 
-  $quotedVcvars = '"' + $resolvedVcvars + '"'
-  Invoke-CmdChain ("call $quotedVcvars $Arch -vcvars_ver=$VcvarsVersion && $configureCommand")
+  $vcvarsCommand = ('call "{0}" {1} -vcvars_ver={2}' -f $resolvedVcvars, $Arch, $VcvarsVersion)
+  Invoke-CmdChain ('{0} && set "PATH={1};%PATH%" && {2}' -f $vcvarsCommand, $pixiPathPrefix, $configureCommand)
 }
 
 switch ($Action) {

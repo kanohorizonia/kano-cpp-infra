@@ -185,10 +185,17 @@ coverage_build() {
             cmake --build --preset "${preset}"
         )
     elif [[ "$target_platform" == "macos" ]]; then
-        # macOS build from non-macOS host → use macBuilder
-        echo "[coverage_build] Remote macOS build via macBuilder"
-        source "$SCRIPT_DIR/macos_remote_build.sh"
-        inf_remote_build_macos "$preset" "Debug"
+        # macOS build from non-macOS host → use repo-local adapter when available.
+        echo "[coverage_build] Remote macOS build via remote host adapter"
+        local repo_local_adapter="${SCRIPT_DIR}/../../../../scripts/macos/remote-build.sh"
+        if [[ -f "$repo_local_adapter" ]]; then
+            # shellcheck disable=SC1091
+source "$repo_local_adapter"
+            kog_remote_build_macos "$preset" "Debug"
+        else
+            source "$SCRIPT_DIR/macos_remote_build.sh"
+            inf_remote_build_macos "$preset" "Debug"
+        fi
     elif [[ "$target_platform" == "linux" ]]; then
         # Linux build from non-Linux host → use Docker
         if command -v docker >/dev/null 2>&1; then

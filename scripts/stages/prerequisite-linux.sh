@@ -4,7 +4,7 @@
 # Linux prerequisite bootstrap for kog self build.
 #
 # Responsibility split:
-#   pixi (pixi.toml)  — cmake, ninja, git, ripgrep (conda-forge packages)
+#   pixi (shared infra pixi.toml)  — cmake, ninja, git, ripgrep (conda-forge packages)
 #   this script       — ensures pixi is installed, runs pixi install,
 #                       then delegates to platform/linux/prerequisite.sh
 #                       for things pixi cannot provide:
@@ -53,20 +53,35 @@ ensure_pixi() {
 }
 
 # ---------------------------------------------------------------------------
-# 2. Run pixi install to materialise the conda-forge environment
-#    (cmake, ninja, git, ripgrep — declared in pixi.toml)
+# 2. Run pixi install to materialise the canonical shared-infra environment
+#    (cmake, ninja, git, ripgrep — declared in src/cpp/shared/infra/pixi.toml)
 # ---------------------------------------------------------------------------
 run_pixi_install() {
-  local project_root="${KANO_GIT_MASTER_ROOT:-$(cd -- "$SCRIPT_DIR/../../../../.." && pwd)}"
+  local manifest_path="${KANO_PIXI_MANIFEST_PATH:-$(cd -- "$SCRIPT_DIR/../.." && pwd)/pixi.toml}"
 
-  if [[ ! -f "$project_root/pixi.toml" ]]; then
-    echo "[prereq][linux] WARNING: pixi.toml not found at $project_root — skipping pixi install" >&2
+  if [[ ! -f "$manifest_path" ]]; then
+    echo "[prereq][linux] WARNING: shared infra pixi.toml not found at $manifest_path — skipping pixi install" >&2
     return 0
   fi
 
-  echo "[prereq][linux] running pixi install in $project_root ..."
-  pixi install --manifest-path "$project_root/pixi.toml"
+  echo "[prereq][linux] running pixi install for $manifest_path ..."
+  pixi install --manifest-path "$manifest_path"
   echo "[prereq][linux] pixi install complete"
+}
+
+# ---------------------------------------------------------------------------
+# 2b. Install shared global tools (pixi global install).
+#    These are shared across ALL projects on this machine.
+#    Installed once; reused by all workspaces via pixi_bootstrap.sh.
+# ---------------------------------------------------------------------------
+run_global_tool_install() {
+  if [[ ! -f "$SCRIPT_DIR/../lib/pixi_bootstrap.sh" ]]; then
+    echo "[prereq][linux] WARNING: pixi_bootstrap.sh not found — skipping global tool install" >&2
+    return 0
+  fi
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/../lib/pixi_bootstrap.sh"
+  kano_pixi_bootstrap_install_global_tools
 }
 
 # ---------------------------------------------------------------------------
@@ -90,6 +105,7 @@ run_platform_prereqs() {
 echo "[prereq][linux] starting Linux prerequisite bootstrap"
 
 ensure_pixi
+run_global_tool_install
 run_pixi_install
 run_platform_prereqs
 

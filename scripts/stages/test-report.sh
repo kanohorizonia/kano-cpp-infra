@@ -36,7 +36,7 @@ detect_preset_from_bin_dir() {
 DETECTED_PRESET="$(detect_preset_from_bin_dir "$CPP_ROOT" || true)"
 if [[ -z "$DETECTED_PRESET" ]]; then
     echo "[ERROR] Could not detect preset from $CPP_ROOT/out/bin/" >&2
-    echo "[ERROR] No built binaries found. Run 'pixi run build' first." >&2
+    echo "[ERROR] No built binaries found. Run 'pixi run --manifest-path src/cpp/shared/infra/pixi.toml build' first." >&2
     exit 1
 fi
 
@@ -58,7 +58,7 @@ EXE_DIR="$(resolve_config_dir "$PRESET_BIN_DIR")"
 
 if [[ -z "$EXE_DIR" ]]; then
     echo "[ERROR] No test binaries found under $PRESET_BIN_DIR/{debug,release,relwithdebinfo}" >&2
-    echo "[ERROR] Run 'pixi run build' first." >&2
+    echo "[ERROR] Run 'pixi run --manifest-path src/cpp/shared/infra/pixi.toml build' first." >&2
     exit 1
 fi
 

@@ -2,6 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Bootstrap pixi environment if not already active
+source "$SCRIPT_DIR/pixi_bootstrap.sh"
+kano_pixi_bootstrap_activate
+
 KANO_WINDOWS_PS_HELPER="$SCRIPT_DIR/windows_preset_helper.ps1"
 KANO_COMMON_BUILD_METADATA_SH="$SCRIPT_DIR/build_metadata.sh"
 

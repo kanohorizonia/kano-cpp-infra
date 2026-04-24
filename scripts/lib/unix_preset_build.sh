@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Bootstrap pixi environment if not already active
+source "$SCRIPT_DIR/pixi_bootstrap.sh"
+kano_pixi_bootstrap_activate
+
+# Accept KANO_CPP_ROOT as fallback for INF_CPP_ROOT (pixi_bootstrap sets this)
+INF_CPP_ROOT="${INF_CPP_ROOT:-${KANO_CPP_ROOT:-}}"
 if [[ -z "${INF_CPP_ROOT:-}" ]]; then
   echo "INF_CPP_ROOT is not set." >&2
   exit 1
 fi
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$SCRIPT_DIR/build_metadata.sh"
 
