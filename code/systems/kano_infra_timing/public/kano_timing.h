@@ -72,7 +72,7 @@ public:
      * @param label  Identifying name for this scope (printed in dtor log)
      * @param dest   Output FILE* (default stderr)
      */
-    explicit ScopedTimingLog(std::string_view label, FILE* dest = stderr) noexcept
+    explicit ScopedTimingLog(std::string_view label, FILE* dest = stdout) noexcept
         : label_(label)
         , dest_(dest)
         , started_(TimingPoint::now())
@@ -131,7 +131,7 @@ class ScopedTimingLogWithElapsed {
 public:
     explicit ScopedTimingLogWithElapsed(std::string_view label,
                                          double& out_elapsed,
-                                         FILE* dest = stderr) noexcept
+                                         FILE* dest = stdout) noexcept
         : label_(label)
         , dest_(dest)
         , out_elapsed_(out_elapsed)
