@@ -3,21 +3,8 @@ name = "kano-cpp-infra"
 channels = ["conda-forge"]
 platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
 
-[dependencies]
-ccache = "*"
-cmake = ">=3.21"
-git = "*"
-ninja = ">=1.13.2,<2"
-ripgrep = "*"
-
-[target.linux-64.dependencies]
-bash = "*"
-
-[target.osx-64.dependencies]
-bash = "*"
-
-[target.osx-arm64.dependencies]
-bash = "*"
+# NOTE: Core toolchain (ccache, cmake, git, ninja, ripgrep) is now managed
+# via pixi-global-tool.toml and installed globally. Do NOT add them here.
 
 # =============================================================================
 # CANONICAL SHARED-INFRA PIXI CONTRACT (src/cpp/shared/infra/)
