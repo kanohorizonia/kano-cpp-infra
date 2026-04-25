@@ -102,6 +102,9 @@ build-release = "bash scripts/self/build.sh"
 build = "bash scripts/self/build.sh"
 rebuild = "bash scripts/self/rebuild.sh"
 
+# Remote macOS build
+build-remote = "bash scripts/platform/mac/remote-build.sh"
+
 # Coverage workflow (CI-ready)
 build-coverage = "bash scripts/stages/coverage-build.sh"
 test-coverage = "bash scripts/stages/coverage-gather.sh"
@@ -125,6 +128,9 @@ build-debug = "bash scripts/platform/mac/native-build.sh"
 build-release = "bash scripts/self/build.sh"
 build = "bash scripts/self/build.sh"
 rebuild = "bash scripts/self/rebuild.sh"
+
+# Remote macOS build
+build-remote = "bash scripts/platform/mac/remote-build.sh"
 
 # Coverage workflow (CI-ready)
 build-coverage = "bash scripts/stages/coverage-build.sh"
