@@ -4,8 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Bootstrap pixi environment if not already active
-source "$SCRIPT_DIR/pixi_bootstrap.sh"
-kano_pixi_bootstrap_activate
+# Skip if global tools (cmake, ninja) are already available in PATH
+if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
+  source "$SCRIPT_DIR/pixi_bootstrap.sh"
+  kano_pixi_bootstrap_activate
+fi
 
 KANO_WINDOWS_PS_HELPER="$SCRIPT_DIR/windows_preset_helper.ps1"
 KANO_COMMON_BUILD_METADATA_SH="$SCRIPT_DIR/build_metadata.sh"
@@ -68,7 +71,16 @@ kano_windows_run_ps_helper() {
 
 kano_windows_file_exists() {
   local in_path="$1"
-  kano_windows_run_ps_helper -Action test-path -Path "$in_path" >/dev/null 2>&1
+  # Convert backslashes to forward slashes for Git Bash compatibility
+  local converted_path="${in_path//\\//}"
+  # Try both original and converted paths
+  if [[ -f "$in_path" || -d "$in_path" ]]; then
+    return 0
+  fi
+  if [[ -f "$converted_path" || -d "$converted_path" ]]; then
+    return 0
+  fi
+  return 1
 }
 
 kano_windows_detect_vcvarsall() {

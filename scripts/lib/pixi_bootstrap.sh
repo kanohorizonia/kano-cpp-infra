@@ -125,8 +125,8 @@ kano_pixi_bootstrap_activate() {
   if kano_pixi_bootstrap_have_command cmake && \
      kano_pixi_bootstrap_have_command ninja && \
      kano_pixi_bootstrap_have_command git; then
+    # Global tools sufficient — use them directly without pixi activation
     printf '[pixi-bootstrap] use global tools from ~/.pixi\n' >&2
-    # Still set KANO_CPP_ROOT so callers get the correct infra root
     local cpp_root=""
     cpp_root="$(kano_pixi_bootstrap_cpp_root)"
     if [[ -n "$cpp_root" ]]; then
@@ -146,6 +146,10 @@ kano_pixi_bootstrap_activate() {
     printf '[pixi-bootstrap] manifest missing; leaving PATH unchanged: %s\n' "$manifest_path" >&2
     return 0
   fi
+
+  # Fix TMP for Windows — pixi shell-hook sets TMP to protected C:\WINDOWS\.tmpXXX
+  # which causes permission-denied errors. Override with user-writable path.
+  export TMP="${TMP:-${TEMP:-/tmp}}"
 
   if ! pixi_cmd="$(command -v pixi 2>/dev/null)"; then
     printf '[pixi-bootstrap] ERROR: manifest exists but pixi not found; fail-fast: %s\n' "$manifest_path" >&2
