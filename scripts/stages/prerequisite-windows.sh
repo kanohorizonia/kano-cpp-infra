@@ -19,6 +19,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM_SCRIPT="$SCRIPT_DIR/../platform/win64/prerequisite.ps1"
 
+# WSL is not a supported Windows build environment — it must be treated as a
+# Linux host and use the Linux prerequisite path instead.
+if [[ "$(uname -s 2>/dev/null || true)" == Linux* ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+  echo "[prereq][windows] ERROR: WSL detected. This script is for native Windows (Git Bash / MSYS2) only." >&2
+  echo "[prereq][windows] On WSL, use the Linux prerequisite path: stages/prerequisite-linux.sh" >&2
+  exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # 1. Ensure pixi is installed
 # ---------------------------------------------------------------------------

@@ -37,6 +37,9 @@ profile-launchers = "bash scripts/stages/profile.sh launchers && bash scripts/st
 profile-unity = "bash scripts/stages/profile.sh unity && bash scripts/stages/profile-report.sh unity"
 profile-pgo = "bash scripts/stages/profile.sh pgo && bash scripts/stages/profile-report.sh pgo"
 
+[target.win-64.activation]
+scripts = ["scripts/win64-activate.bat"]
+
 [target.win-64.tasks]
 # Bootstrap
 bootstrap-system = "bash scripts/platform/win64/prerequisite.ps1"

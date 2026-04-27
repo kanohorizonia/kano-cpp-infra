@@ -102,10 +102,23 @@ kano_pixi_bootstrap_is_active() {
 }
 
 kano_pixi_bootstrap_activate() {
-  # Set global PIXI_HOME to user's home — shared across all projects on this machine.
-  # This overrides pixi's default per-workspace env resolution (which uses <project>/.pixi/)
-  # and makes all projects reuse the same tooling from ~/.pixi/envs/default.
-  export PIXI_HOME="${HOME}/.pixi"
+  # Resolve PIXI_HOME: on Windows (Git Bash / MSYS2), $HOME may point to a
+  # POSIX-style path that differs from USERPROFILE where pixi is actually
+  # installed. Prefer USERPROFILE-derived path when the pixi bin dir exists
+  # there and PIXI_HOME is not already set explicitly.
+  if [[ -z "${PIXI_HOME:-}" ]]; then
+    local _win_pixi_home=""
+    # Git Bash / MSYS2: USERPROFILE is a Windows path like C:\Users\foo
+    if [[ -n "${USERPROFILE:-}" ]]; then
+      # Convert backslashes and drive letter to POSIX path
+      _win_pixi_home="$(printf '%s' "${USERPROFILE}" | sed 's|\\|/|g; s|^\([A-Za-z]\):|/\L\1|')"
+    fi
+    if [[ -n "$_win_pixi_home" && -d "${_win_pixi_home}/.pixi/bin" ]]; then
+      export PIXI_HOME="${_win_pixi_home}/.pixi"
+    else
+      export PIXI_HOME="${HOME}/.pixi"
+    fi
+  fi
 
   local manifest_path=""
   local env_name=""

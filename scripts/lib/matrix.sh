@@ -6,9 +6,15 @@ KANO_CPP_INFRA_MATRIX_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &&
 KANO_CPP_INFRA_MATRIX_CPP_ROOT="$(cd -- "$KANO_CPP_INFRA_MATRIX_SCRIPT_DIR/../../../../.." && pwd)"
 KANO_CPP_INFRA_MATRIX_BASE="$KANO_CPP_INFRA_MATRIX_SCRIPT_DIR/.."
 
+kano_cpp_infra_matrix_is_wsl() {
+  [[ "$(uname -s 2>/dev/null || true)" == Linux* ]] && \
+  grep -qi microsoft /proc/version 2>/dev/null
+}
+
 kano_cpp_infra_matrix_host_os() {
   local os_name
   os_name="$(uname -s 2>/dev/null || true)"
+  # WSL reports Linux but is not a supported Windows build path — treat as linux host
   case "$os_name" in
     MINGW*|MSYS*|CYGWIN*) printf '%s\n' win64 ;;
     Darwin) printf '%s\n' mac ;;
