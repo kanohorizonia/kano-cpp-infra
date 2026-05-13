@@ -181,38 +181,54 @@ function Get-PixiEnvironmentRoot([string]$ProjectRoot) {
   throw "pixi environment root not found from $ProjectRoot. Run './kog self install-prereq'."
 }
 
+function Test-ValidExecutable([string]$Path) {
+  # Returns true only if the path points to a non-empty, valid executable file.
+  if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+  $resolved = Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue
+  if (-not $resolved) { return $false }
+  $item = Get-Item -LiteralPath $resolved.Path -ErrorAction SilentlyContinue
+  if (-not $item) { return $false }
+  # Must be a file with non-zero length (WinGet symlinks can be 0-byte stubs)
+  return ($item.Length -gt 0)
+}
+
 function Get-GlobalToolPath([string]$ToolName) {
-  # Try PowerShell-native PATH search first (works in all contexts)
-  $toolPath = Get-Command -Name $ToolName -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
-  if ($toolPath) {
-    return (Resolve-Path -LiteralPath $toolPath -ErrorAction SilentlyContinue).Path
-  }
-
-  # Fallback to cmd.exe where (only works when Windows PATH has the tool)
-  $output = cmd.exe /c "where $ToolName 2>nul"
-  if ($null -ne $output -and $output.Trim() -ne "") {
-    $toolPath = $output.Trim().Split([Environment]::NewLine)[0]
-    if (Test-Path -LiteralPath $toolPath) {
-      return (Resolve-Path -LiteralPath $toolPath).Path
-    }
-  }
-
-  # Check common global pixi locations (user-level install, not in PATH by default)
-  $userPixiBin = Join-Path $env:HOME ".pixi\bin"
+  # Check common global pixi locations first — these are always valid executables.
+  # This avoids picking up broken WinGet 0-byte stub symlinks from PATH.
+  $userPixiBin = $null
   if ($env:HOME) {
+    $userPixiBin = Join-Path $env:HOME ".pixi\bin"
+  } elseif ($env:USERPROFILE) {
+    $userPixiBin = Join-Path $env:USERPROFILE ".pixi\bin"
+  }
+  if ($userPixiBin) {
     $pixiToolPath = Join-Path $userPixiBin "$ToolName.exe"
-    if (Test-Path -LiteralPath $pixiToolPath) {
+    if (Test-ValidExecutable $pixiToolPath) {
       return (Resolve-Path -LiteralPath $pixiToolPath).Path
     }
     $pixiToolPathNoExt = Join-Path $userPixiBin $ToolName
-    if (Test-Path -LiteralPath $pixiToolPathNoExt) {
+    if (Test-ValidExecutable $pixiToolPathNoExt) {
       return (Resolve-Path -LiteralPath $pixiToolPathNoExt).Path
     }
   }
-  # Also check without .exe extension
-  $pixiToolPath = Join-Path $userPixiBin "$ToolName.exe"
-  if (Test-Path -LiteralPath $pixiToolPath) {
-    return (Resolve-Path -LiteralPath $pixiToolPath).Path
+
+  # Try PowerShell-native PATH search, but validate the result is a real executable.
+  $candidates = @(Get-Command -Name $ToolName -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+  foreach ($candidate in $candidates) {
+    if (Test-ValidExecutable $candidate) {
+      return (Resolve-Path -LiteralPath $candidate -ErrorAction SilentlyContinue).Path
+    }
+  }
+
+  # Fallback to cmd.exe where, validating each result.
+  $output = cmd.exe /c "where $ToolName 2>nul"
+  if ($null -ne $output -and $output.Trim() -ne "") {
+    foreach ($line in $output.Trim().Split([Environment]::NewLine)) {
+      $toolPath = $line.Trim()
+      if (Test-ValidExecutable $toolPath) {
+        return (Resolve-Path -LiteralPath $toolPath).Path
+      }
+    }
   }
 
   return $null
