@@ -70,7 +70,8 @@ function Detect-Vcvarsall {
   }
 
   # Find all VS installations with C++ toolset, return full path to vcvarsall.bat
-  $allVcvars = & $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find "VC\Auxiliary\Build\vcvarsall.bat" 2>$null
+  # Wrap in @() to ensure array even when vswhere returns a single string
+  $allVcvars = @(& $vswhere -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find "VC\Auxiliary\Build\vcvarsall.bat" 2>$null)
 
   if (-not $allVcvars -or $allVcvars.Count -eq 0) {
     throw "No Visual Studio installation with C++ toolset found. Please install Visual Studio with C++ workload."
