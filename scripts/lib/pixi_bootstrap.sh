@@ -108,10 +108,14 @@ kano_pixi_bootstrap_activate() {
   # there and PIXI_HOME is not already set explicitly.
   if [[ -z "${PIXI_HOME:-}" ]]; then
     local _win_pixi_home=""
-    # Git Bash / MSYS2: USERPROFILE is a Windows path like C:\Users\foo
+    # Git Bash / MSYS2 / Cygwin: USERPROFILE is a Windows path like C:\Users\foo
     if [[ -n "${USERPROFILE:-}" ]]; then
       # Convert backslashes and drive letter to POSIX path
-      _win_pixi_home="$(printf '%s' "${USERPROFILE}" | sed 's|\\|/|g; s|^\([A-Za-z]\):|/\L\1|')"
+      if command -v cygpath >/dev/null 2>&1; then
+        _win_pixi_home="$(cygpath -u "${USERPROFILE}")"
+      else
+        _win_pixi_home="$(printf '%s' "${USERPROFILE}" | sed 's|\\|/|g; s|^\([A-Za-z]\):|/\L\1|')"
+      fi
     fi
     if [[ -n "$_win_pixi_home" && -d "${_win_pixi_home}/.pixi/bin" ]]; then
       export PIXI_HOME="${_win_pixi_home}/.pixi"
