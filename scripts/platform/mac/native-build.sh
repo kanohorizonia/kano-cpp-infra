@@ -15,12 +15,12 @@
 # =============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export INF_CPP_ROOT="${INF_CPP_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+KANO_INFRA_MAC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export INF_CPP_ROOT="${INF_CPP_ROOT:-$(cd "$KANO_INFRA_MAC_SCRIPT_DIR/../.." && pwd)}"
 
 # Source infra's generic unix preset runner (provides kano_cpp_run_unix_preset)
 # shellcheck disable=SC1091
-source "${SCRIPT_DIR}/../../lib/unix_preset_build.sh"
+source "${KANO_INFRA_MAC_SCRIPT_DIR}/../../lib/unix_preset_build.sh"
 
 export INF_BUILD_USE_LLVM=1
 kano_cpp_run_unix_preset "${1:-macos-ninja-clang}" "${2:-macos-ninja-clang-debug}" INF

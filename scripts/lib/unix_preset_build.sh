@@ -1,29 +1,36 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KANO_INFRA_UNIX_PRESET_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Bootstrap pixi environment if not already active
-source "$SCRIPT_DIR/pixi_bootstrap.sh"
+# Bootstrap pixi environment if not already active.
+# shellcheck source=/dev/null
+source "$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/pixi_bootstrap.sh"
 kano_pixi_bootstrap_activate
 
-# Accept KANO_CPP_ROOT as fallback for INF_CPP_ROOT (pixi_bootstrap sets this)
+# Accept KANO_CPP_ROOT as fallback for INF_CPP_ROOT (pixi_bootstrap sets this).
 INF_CPP_ROOT="${INF_CPP_ROOT:-${KANO_CPP_ROOT:-}}"
 if [[ -z "${INF_CPP_ROOT:-}" ]]; then
   echo "INF_CPP_ROOT is not set." >&2
   exit 1
 fi
+export INF_CPP_ROOT
+export KANO_CPP_ROOT="${KANO_CPP_ROOT:-$INF_CPP_ROOT}"
+export KANO_CPP_INFRA_CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-$INF_CPP_ROOT}"
 
-source "$SCRIPT_DIR/build_metadata.sh"
+# shellcheck source=/dev/null
+source "$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/build_metadata.sh"
 
 # =============================================================================
-# inf_run_unix_preset — git-master wrapper around kano_cpp_run_unix_preset
+# kano_cpp_run_unix_preset
 # =============================================================================
-# Applies git-master-specific overrides (LLVM prefix, modules) then delegates.
+# Runs a Unix CMake configure/build preset with shared self-build metadata.
+# The optional third argument is a log/config prefix kept for API compatibility.
 # =============================================================================
-inf_run_unix_preset() {
-  local in_configure_preset="$1"
-  local in_build_preset="$2"
+kano_cpp_run_unix_preset() {
+  local in_configure_preset="${1:-}"
+  local in_build_preset="${2:-}"
+  local build_prefix="${3:-KANO}"
   local -a extra_args=()
   local -a cache_override_args=()
   local llvm_prefix=""
@@ -31,23 +38,30 @@ inf_run_unix_preset() {
   local arch=""
   local preset_name=""
 
-  if [[ -n "${INF_CMAKE_CACHE_ARGS_JSON:-}" ]]; then
-    cache_override_args+=("$(python - <<'PY'
-import json, os
-data = json.loads(os.environ['INF_CMAKE_CACHE_ARGS_JSON'])
-for key, value in data.items():
-    print(f'-D{key}={value}')
-PY
-)")
+  if [[ -z "$in_configure_preset" || -z "$in_build_preset" ]]; then
+    echo "Usage: kano_cpp_run_unix_preset <configure-preset> <build-preset> [prefix]" >&2
+    return 1
   fi
 
-  if [[ "${INF_BUILD_ENABLE_MODULES:-0}" == "1" ]]; then
+  export KANO_CPP_INFRA_BUILD_PREFIX="$build_prefix"
+
+  if [[ -n "${INF_CMAKE_CACHE_ARGS_JSON:-}" ]]; then
+    # shellcheck disable=SC2207
+    cache_override_args+=( $(python - <<'KANO_CACHE_ARGS_PY'
+import json, os
+for key, value in json.loads(os.environ['INF_CMAKE_CACHE_ARGS_JSON']).items():
+    print(f'-D{key}={value}')
+KANO_CACHE_ARGS_PY
+) )
+  fi
+
+  if [[ "${INF_BUILD_ENABLE_MODULES:-${KOG_BUILD_ENABLE_MODULES:-0}}" == "1" ]]; then
     extra_args+=("-DINF_ENABLE_MODULES=ON")
   else
     extra_args+=("-DINF_ENABLE_MODULES=OFF")
   fi
 
-  if [[ "$(uname -s 2>/dev/null || true)" == "Darwin" && "${INF_BUILD_USE_LLVM:-0}" == "1" ]]; then
+  if [[ "$(uname -s 2>/dev/null || true)" == "Darwin" && "${INF_BUILD_USE_LLVM:-${KOG_BUILD_USE_LLVM:-0}}" == "1" ]]; then
     llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
     if [[ -z "$llvm_prefix" || ! -x "$llvm_prefix/bin/clang" || ! -x "$llvm_prefix/bin/clang++" ]]; then
       echo "Homebrew LLVM is required for --llvm mode. Install with: brew install llvm" >&2
@@ -75,11 +89,23 @@ PY
 
   (
     cd "$INF_CPP_ROOT"
-    inf_apply_self_build_config
-    inf_collect_build_metadata
-    # shellcheck disable=SC2206
-    local _cache_args=( ${cache_override_args[*]:-} )
-    cmake --preset "$in_configure_preset" "${extra_args[@]}" "${_cache_args[@]}"
+    kano_cpp_apply_self_build_config
+    kano_cpp_collect_build_metadata
+    cmake --preset "$in_configure_preset" "${extra_args[@]}" "${cache_override_args[@]}"
     cmake --build --preset "$in_build_preset"
   )
+}
+
+# Backward-compatible alias for older scripts that still call the old infra name.
+inf_run_unix_preset() {
+  kano_cpp_run_unix_preset "$@"
+}
+
+# Backward-compatible aliases for older scripts that still call the old metadata names.
+inf_apply_self_build_config() {
+  kano_cpp_apply_self_build_config "$@"
+}
+
+inf_collect_build_metadata() {
+  kano_cpp_collect_build_metadata "$@"
 }

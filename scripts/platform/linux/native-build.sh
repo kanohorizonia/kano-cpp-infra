@@ -15,18 +15,18 @@
 # =============================================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KANO_INFRA_LINUX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -z "${KANO_CPP_ROOT:-${INF_CPP_ROOT:-${KOB_CPP_ROOT:-}}}" ]]; then
-    export KANO_CPP_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+    export KANO_CPP_ROOT="$(cd "$KANO_INFRA_LINUX_SCRIPT_DIR/../.." && pwd)"
 fi
 
 # Source infra's generic unix preset runner
 # shellcheck disable=SC1091
-source "${SCRIPT_DIR}/../../lib/unix_preset_build.sh"
+source "${KANO_INFRA_LINUX_SCRIPT_DIR}/../../lib/unix_preset_build.sh"
 
 # Source infra's Docker Linux build helper (for cross-host builds)
 # shellcheck disable=SC1091
-source "${SCRIPT_DIR}/docker-build.sh"
+source "${KANO_INFRA_LINUX_SCRIPT_DIR}/docker-build.sh"
 
 detect_host_and_build() {
     local in_configure_preset="${1:-}"
