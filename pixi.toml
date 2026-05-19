@@ -45,7 +45,7 @@ scripts = ["scripts/win64-activate.bat"]
 bootstrap-system = "bash scripts/platform/win64/prerequisite.ps1"
 
 # Development build (Debug preset - fast iteration)
-build-debug = "bash scripts/platform/win64/ninja-msvc-debug.sh"
+build-debug = "bash scripts/self/build-debug.sh"
 
 # Release build (optimized)
 build-release = "bash scripts/self/build.sh"

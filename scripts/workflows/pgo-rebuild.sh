@@ -3,14 +3,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-$(cd -- "$SCRIPT_DIR/../../../.." && pwd)}"
-COMMON_ROOT="$CPP_ROOT/shared/infra/scripts/common"
+LIB_ROOT="$CPP_ROOT/shared/infra/scripts/lib"
 STAGES_ROOT="$CPP_ROOT/shared/infra/scripts/stages"
 
-BUILD_METADATA_SH="$COMMON_ROOT/build_metadata.sh"
-UNIX_PRESET_BUILD_SH="$COMMON_ROOT/unix_preset_build.sh"
-WINDOWS_PRESET_BUILD_SH="$COMMON_ROOT/windows_preset_build.sh"
+BUILD_METADATA_SH="$LIB_ROOT/build_metadata.sh"
+UNIX_PRESET_BUILD_SH="$LIB_ROOT/unix_preset_build.sh"
+WINDOWS_PRESET_BUILD_SH="$LIB_ROOT/windows_preset_build.sh"
 PGO_GATHER_SH="$STAGES_ROOT/pgo-gather.sh"
-PGO_WORKFLOW_SH="$COMMON_ROOT/pgo_workflow.sh"
+PGO_WORKFLOW_SH="$LIB_ROOT/pgo_workflow.sh"
 
 require_file() {
   local in_path="$1"
@@ -33,6 +33,8 @@ data = {}
 if raw:
     data = json.loads(raw)
 data["KANO_CPP_INFRA_PGO_MODE"] = mode
+if mode == "use":
+  data.setdefault("KOG_BUILD_TESTS", "OFF")
 print(json.dumps(data))
 PY
 }
@@ -138,14 +140,29 @@ run_collect_build() {
   local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
 
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET="$configure_preset"
+  if is_windows_host; then
+    export INF_PGO_COLLECT_DIR="$CPP_ROOT/out/bin/$configure_preset/debug"
+  else
+    export INF_PGO_COLLECT_DIR="$CPP_ROOT/out/obj/$configure_preset"
+  fi
+  if is_windows_host; then
+    export KANO_CPP_INFRA_PGO_COMPILER_ID="MSVC"
+  fi
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode collect)"
+
+  # Clean the pgo-collect build dir to ensure MSVC is used (not a stale MinGW cache)
+  local collect_obj_dir="$CPP_ROOT/out/obj/$configure_preset"
+  if [[ -d "$collect_obj_dir" ]]; then
+    echo "[pgo] cleaning stale collect build dir: $collect_obj_dir" >&2
+    rm -rf "$collect_obj_dir"
+  fi
 
   if is_windows_host; then
     # shellcheck disable=SC1090
-    source "$BUILD_METADATA_SH"
-    # shellcheck disable=SC1090
     source "$WINDOWS_PRESET_BUILD_SH"
-    kano_cpp_infra_run_windows_preset "$configure_preset" "$build_preset" "${KANO_CPP_INFRA_VCVARS_ARCH:-x64}"
+    kano_windows_run_preset "$configure_preset" "$build_preset" "${KANO_CPP_INFRA_VCVARS_ARCH:-x64}"
   else
     # shellcheck disable=SC1090
     source "$UNIX_PRESET_BUILD_SH"
@@ -161,14 +178,16 @@ run_use_build() {
   local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
 
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_ROOT="$CPP_ROOT"
+  if is_windows_host; then
+    export KANO_CPP_INFRA_PGO_COMPILER_ID="MSVC"
+  fi
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode use)"
 
   if is_windows_host; then
     # shellcheck disable=SC1090
-    source "$BUILD_METADATA_SH"
-    # shellcheck disable=SC1090
     source "$WINDOWS_PRESET_BUILD_SH"
-    kano_cpp_infra_run_windows_preset "$configure_preset" "$build_preset" "${KANO_CPP_INFRA_VCVARS_ARCH:-x64}"
+    kano_windows_run_preset "$configure_preset" "$build_preset" "${KANO_CPP_INFRA_VCVARS_ARCH:-x64}"
   else
     # shellcheck disable=SC1090
     source "$UNIX_PRESET_BUILD_SH"
@@ -176,6 +195,77 @@ run_use_build() {
   fi
 
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
+}
+
+copy_msvc_pgd_to_use_dir() {
+  if ! is_windows_host; then
+    return 0
+  fi
+
+  local collect_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
+  local use_preset="${KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET:-$(default_use_configure_preset)}"
+  local collect_dir="$CPP_ROOT/out/bin/$collect_preset/debug"
+  local use_dir="$CPP_ROOT/out/bin/$use_preset/release"
+
+  if [[ ! -d "$collect_dir" ]]; then
+    echo "[pgo] collect profile dir missing: $collect_dir" >&2
+    return 1
+  fi
+
+  mkdir -p "$use_dir"
+
+  local copied=0
+  local pgd
+  shopt -s nullglob
+  for pgd in "$collect_dir"/*.pgd; do
+    cp -f "$pgd" "$use_dir/"
+    copied=$((copied + 1))
+  done
+  shopt -u nullglob
+
+  if [[ "$copied" -eq 0 ]]; then
+    echo "[pgo] no .pgd files found in $collect_dir" >&2
+    return 1
+  fi
+
+  echo "[pgo] copied $copied .pgd files to $use_dir" >&2
+}
+
+run_gather_stage() {
+  if [[ -n "${KANO_CPP_INFRA_PGO_GATHER_COMMAND:-}" || -n "${KOG_PGO_GATHER_COMMAND:-}" ]]; then
+    bash "$PGO_GATHER_SH"
+    return 0
+  fi
+
+  if is_windows_host; then
+    local collect_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
+    local collect_build_dir="$CPP_ROOT/out/obj/$collect_preset"
+    local collect_bin_dir="$CPP_ROOT/out/bin/$collect_preset/debug"
+    local ran_tests=0
+    local test_name
+    echo "[pgo] default gather: running collect test binaries from $collect_bin_dir" >&2
+    for test_name in \
+      kano_git_cli_tests \
+      kano_git_tui_tests \
+      kano_git_commit_plan_tests \
+      kano_git_export_tests; do
+      local test_exe="$collect_bin_dir/$test_name.exe"
+      if [[ -x "$test_exe" ]]; then
+        echo "[pgo] smoke $test_name (--list-test-names-only)" >&2
+        if ! "$test_exe" --list-test-names-only >/dev/null 2>&1; then
+          echo "[pgo] warning: $test_name smoke failed; continue gather with available profile data" >&2
+        fi
+        ran_tests=$((ran_tests + 1))
+      fi
+    done
+    if [[ "$ran_tests" -eq 0 ]]; then
+      echo "[pgo] no collect test binaries found; fallback to CTest in $collect_build_dir" >&2
+      ctest --test-dir "$collect_build_dir" -C Debug --output-on-failure
+    fi
+    return 0
+  fi
+
+  bash "$PGO_GATHER_SH"
 }
 
 main() {
@@ -186,8 +276,9 @@ main() {
   require_file "$PGO_WORKFLOW_SH"
 
   run_collect_build
-  bash "$PGO_GATHER_SH"
+  run_gather_stage
   bash "$PGO_WORKFLOW_SH" merge
+  copy_msvc_pgd_to_use_dir
   run_use_build
 }
 

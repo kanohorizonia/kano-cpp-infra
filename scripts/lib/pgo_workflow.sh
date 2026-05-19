@@ -13,9 +13,16 @@ set -euo pipefail
 detect_pgo_environment() {
     local platform
     local compiler_id
+    local forced_compiler
 
     platform="$(uname -s 2>/dev/null || echo "unknown")"
     compiler_id="unknown"
+    forced_compiler="${KANO_CPP_INFRA_PGO_COMPILER_ID:-${INF_PGO_COMPILER_ID:-}}"
+
+    if [[ -n "$forced_compiler" ]]; then
+        echo "$platform:$forced_compiler"
+        return 0
+    fi
 
     if [[ -n "${CXX:-}" ]]; then
         if [[ "$CXX" == *"clang"* ]]; then
@@ -24,6 +31,14 @@ detect_pgo_environment() {
             compiler_id="GNU"
         elif [[ "$CXX" == *"msvc"* || "$CXX" == "cl"* ]]; then
             compiler_id="MSVC"
+        fi
+    elif [[ "$platform" == MINGW* || "$platform" == MSYS* || "$platform" == CYGWIN* ]]; then
+        if command -v cl >/dev/null 2>&1; then
+            compiler_id="MSVC"
+        elif command -v clang++ >/dev/null 2>&1; then
+            compiler_id="Clang"
+        elif command -v g++ >/dev/null 2>&1; then
+            compiler_id="GNU"
         fi
     elif command -v clang++ >/dev/null 2>&1; then
         compiler_id="Clang"
@@ -38,8 +53,8 @@ detect_pgo_environment() {
 
 # Default PGO directories
 INF_PGO_ROOT="${INF_PGO_ROOT:-${INF_BUILD_ROOT:-$(pwd)/build}/pgo}"
-INF_PGO_COLLECT_DIR="$INF_PGO_ROOT/collect"
-INF_PGO_PROFILE_DIR="$INF_PGO_ROOT/profiles"
+INF_PGO_COLLECT_DIR="${INF_PGO_COLLECT_DIR:-$INF_PGO_ROOT/collect}"
+INF_PGO_PROFILE_DIR="${INF_PGO_PROFILE_DIR:-$INF_PGO_ROOT/profiles}"
 INF_PGO_MERGED_FILE="$INF_PGO_PROFILE_DIR/merged.profdata"
 
 # Unix detect

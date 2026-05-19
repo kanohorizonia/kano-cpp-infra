@@ -147,6 +147,30 @@ function Get-AdditionalCMakeCacheArguments {
     [void]$arguments.Add((Format-CMakeCacheArgument -Name "${cmakeVarPrefix}_BUILD_PLATFORM" -Value $valueMap["BUILD_PLATFORM"]))
   }
 
+  $rawCacheArgsJson = $env:KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON
+  if ([string]::IsNullOrWhiteSpace($rawCacheArgsJson)) {
+    $rawCacheArgsJson = $env:INF_CMAKE_CACHE_ARGS_JSON
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($rawCacheArgsJson)) {
+    try {
+      $parsedCacheArgs = $rawCacheArgsJson | ConvertFrom-Json -ErrorAction Stop
+      foreach ($property in $parsedCacheArgs.PSObject.Properties) {
+        $name = [string]$property.Name
+        if ([string]::IsNullOrWhiteSpace($name)) {
+          continue
+        }
+        $value = ""
+        if ($null -ne $property.Value) {
+          $value = [string]$property.Value
+        }
+        [void]$arguments.Add((Format-CMakeCacheArgument -Name $name -Value $value))
+      }
+    } catch {
+      throw ("Invalid KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON/INF_CMAKE_CACHE_ARGS_JSON: {0}" -f $_.Exception.Message)
+    }
+  }
+
   return $arguments.ToArray()
 }
 
@@ -320,6 +344,34 @@ function Invoke-CmdChain([string]$CmdLine) {
   if (-not $?) { exit $LASTEXITCODE }
 }
 
+function Invoke-CmdSteps([string[]]$Steps) {
+  if ($null -eq $Steps -or $Steps.Count -eq 0) {
+    return
+  }
+
+  $tempBase = [System.IO.Path]::GetTempFileName()
+  $tempCmd = [System.IO.Path]::ChangeExtension($tempBase, ".cmd")
+  Move-Item -LiteralPath $tempBase -Destination $tempCmd -Force
+
+  try {
+    $scriptLines = New-Object System.Collections.Generic.List[string]
+    [void]$scriptLines.Add("@echo off")
+    foreach ($step in $Steps) {
+      if (-not [string]::IsNullOrWhiteSpace($step)) {
+        [void]$scriptLines.Add($step)
+      }
+    }
+
+    Set-Content -LiteralPath $tempCmd -Value ($scriptLines -join "`r`n") -Encoding Ascii
+    cmd.exe /d /c ('"{0}"' -f $tempCmd)
+    if (-not $?) {
+      exit $LASTEXITCODE
+    }
+  } finally {
+    Remove-Item -LiteralPath $tempCmd -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Run-Preset {
   if ([string]::IsNullOrWhiteSpace($Root) -or [string]::IsNullOrWhiteSpace($ConfigurePreset) -or [string]::IsNullOrWhiteSpace($BuildPreset)) {
     throw "Root, ConfigurePreset, and BuildPreset are required"
@@ -333,7 +385,6 @@ function Run-Preset {
 
   $rootPath = (Resolve-Path -LiteralPath $Root).Path
   Set-Location -LiteralPath $rootPath
-  $pixiPathPrefix = Get-PixiBuildToolPrefix -ProjectRoot $rootPath
   $pixiNinjaPath = Get-PixiNinjaPath -ProjectRoot $rootPath
 
   $configureCommand = "cmake --preset $ConfigurePreset"
@@ -341,12 +392,15 @@ function Run-Preset {
   foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
 
   $vcvarsCommand = ('call "{0}" {1} -vcvars_ver={2}' -f $resolvedVcvars, $Arch, $VcvarsVersion)
-  # Run vcvarsall, cmake configure, AND cmake build ALL in one cmd.exe subprocess so
-  # that the env vars (INCLUDE, LIB, PATH, etc.) set by vcvarsall persist for both
-  # the configure and build steps. Splitting into separate Invoke-CmdChain calls would
-  # lose those env vars when each subprocess exits.
-  $buildCommand = $vcvarsCommand + ' && set "PATH=' + $pixiPathPrefix + ';%PATH%" && ' + $configureCommand + ' && cmake --build --preset ' + $BuildPreset
-  Invoke-CmdChain $buildCommand
+  Invoke-CmdSteps @(
+    $vcvarsCommand,
+    'if errorlevel 1 exit /b %errorlevel%',
+    'set "CC="',
+    'set "CXX="',
+    $configureCommand,
+    'if errorlevel 1 exit /b %errorlevel%',
+    "cmake --build --preset $BuildPreset"
+  )
 }
 
 function Configure-Preset {
@@ -362,7 +416,6 @@ function Configure-Preset {
 
   $rootPath = (Resolve-Path -LiteralPath $Root).Path
   Set-Location -LiteralPath $rootPath
-  $pixiPathPrefix = Get-PixiBuildToolPrefix -ProjectRoot $rootPath
   $pixiNinjaPath = Get-PixiNinjaPath -ProjectRoot $rootPath
 
   $configureCommand = "cmake --preset $ConfigurePreset"
@@ -370,7 +423,13 @@ function Configure-Preset {
   foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
 
   $vcvarsCommand = ('call "{0}" {1} "-vcvars_ver={2}"' -f $resolvedVcvars, $Arch, $VcvarsVersion)
-  Invoke-CmdChain ('{0} && set "PATH={1};%PATH%" && {2}' -f $vcvarsCommand, $pixiPathPrefix, $configureCommand)
+  Invoke-CmdSteps @(
+    $vcvarsCommand,
+    'if errorlevel 1 exit /b %errorlevel%',
+    'set "CC="',
+    'set "CXX="',
+    $configureCommand
+  )
 }
 
 function Build-Presets {
@@ -393,7 +452,6 @@ function Build-Presets {
   $rootPath = if ([string]::IsNullOrWhiteSpace($Root)) { pwd } else { (Resolve-Path -LiteralPath $Root).Path }
   Set-Location -LiteralPath $rootPath
 
-  $pixiPathPrefix = Get-PixiBuildToolPrefix -ProjectRoot $rootPath
   $pixiNinjaPath = Get-PixiNinjaPath -ProjectRoot $rootPath
 
   foreach ($preset in $allPresets) {
@@ -407,10 +465,22 @@ function Build-Presets {
     foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
 
     Write-Host "=== Configuring $configurePreset ($presetArch) ===" -ForegroundColor Cyan
-    Invoke-CmdChain ('{0} && set "PATH={1};%PATH%" && {2}' -f $vcvarsCommand, $pixiPathPrefix, $configureCommand)
+    Invoke-CmdSteps @(
+      $vcvarsCommand,
+      'if errorlevel 1 exit /b %errorlevel%',
+      'set "CC="',
+      'set "CXX="',
+      $configureCommand
+    )
 
     Write-Host "=== Building $buildPreset ===" -ForegroundColor Green
-    Invoke-CmdChain ('{0} && set "PATH={1};%PATH%" && cmake --build --preset {2}' -f $vcvarsCommand, $pixiPathPrefix, $buildPreset)
+    Invoke-CmdSteps @(
+      $vcvarsCommand,
+      'if errorlevel 1 exit /b %errorlevel%',
+      'set "CC="',
+      'set "CXX="',
+      "cmake --build --preset $buildPreset"
+    )
   }
 }
 
