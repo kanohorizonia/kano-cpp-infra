@@ -232,39 +232,9 @@ copy_msvc_pgd_to_use_dir() {
 }
 
 run_gather_stage() {
-  if [[ -n "${KANO_CPP_INFRA_PGO_GATHER_COMMAND:-}" || -n "${KOG_PGO_GATHER_COMMAND:-}" ]]; then
-    bash "$PGO_GATHER_SH"
-    return 0
-  fi
-
-  if is_windows_host; then
-    local collect_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
-    local collect_build_dir="$CPP_ROOT/out/obj/$collect_preset"
-    local collect_bin_dir="$CPP_ROOT/out/bin/$collect_preset/debug"
-    local ran_tests=0
-    local test_name
-    echo "[pgo] default gather: running collect test binaries from $collect_bin_dir" >&2
-    for test_name in \
-      kano_git_cli_tests \
-      kano_git_tui_tests \
-      kano_git_commit_plan_tests \
-      kano_git_export_tests; do
-      local test_exe="$collect_bin_dir/$test_name.exe"
-      if [[ -x "$test_exe" ]]; then
-        echo "[pgo] smoke $test_name (--list-test-names-only)" >&2
-        if ! "$test_exe" --list-test-names-only >/dev/null 2>&1; then
-          echo "[pgo] warning: $test_name smoke failed; continue gather with available profile data" >&2
-        fi
-        ran_tests=$((ran_tests + 1))
-      fi
-    done
-    if [[ "$ran_tests" -eq 0 ]]; then
-      echo "[pgo] no collect test binaries found; fallback to CTest in $collect_build_dir" >&2
-      ctest --test-dir "$collect_build_dir" -C Debug --output-on-failure
-    fi
-    return 0
-  fi
-
+  # Use the shared gather stage for all hosts to keep behavior consistent.
+  # The stage itself supports custom commands via
+  # KANO_CPP_INFRA_PGO_GATHER_COMMAND / KOG_PGO_GATHER_COMMAND.
   bash "$PGO_GATHER_SH"
 }
 
