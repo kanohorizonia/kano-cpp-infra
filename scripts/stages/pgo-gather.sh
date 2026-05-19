@@ -59,30 +59,124 @@ run_collect_case() {
   local in_logs_dir="$5"
 
   local report_path="$in_reports_dir/$in_label.xml"
+  local report_tmp="$report_path.tmp"
   local log_path="$in_logs_dir/$in_label.log"
 
   local -a args
   local -a reporter_args=(--reporter junit --out "$report_path")
+  local -a reporter_args_tmp=(--reporter junit --out "$report_tmp")
   args=(--order lex --rng-seed 1337 --durations yes)
   if [[ -n "$in_filter" ]]; then
     args+=("$in_filter")
   fi
-  args+=("${reporter_args[@]}")
+  args+=("${reporter_args_tmp[@]}")
+
+  rm -f "$report_tmp"
 
   echo "[pgo-gather] running $in_label (${in_filter:-all-tests})" >&2
   if "$in_candidate" "${args[@]}" >"$log_path" 2>&1; then
+    mv -f "$report_tmp" "$report_path"
     echo "[pgo-gather] pass $in_label" >&2
     return 0
   fi
 
   echo "[pgo-gather] warning: $in_label failed for filter '${in_filter:-all-tests}', retry full binary" >&2
-  if "$in_candidate" --order lex --rng-seed 1337 "${reporter_args[@]}" >"$log_path" 2>&1; then
+  rm -f "$report_tmp"
+  if "$in_candidate" --order lex --rng-seed 1337 "${reporter_args_tmp[@]}" >"$log_path" 2>&1; then
+    mv -f "$report_tmp" "$report_path"
     echo "[pgo-gather] pass $in_label (fallback all-tests)" >&2
     return 0
   fi
 
+  rm -f "$report_tmp"
+  # Keep the output machine-readable even on failures.
+  cat > "$report_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="$in_label" errors="0" failures="1" skipped="0" tests="1" time="0">
+    <testcase classname="$in_label" name="pgo-gather-run" time="0">
+      <failure message="pgo-gather execution failed; inspect $log_path"/>
+    </testcase>
+  </testsuite>
+</testsuites>
+EOF
+
   echo "[pgo-gather] warning: $in_label fallback failed; see $log_path" >&2
   return 1
+}
+
+render_junit_html_reports() {
+  local in_reports_dir="$1"
+  local html_root="$2"
+
+  mkdir -p "$html_root"
+
+  python - "$in_reports_dir" "$html_root" <<'PY'
+from __future__ import annotations
+
+import html
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+reports_dir = Path(sys.argv[1])
+html_root = Path(sys.argv[2])
+
+rows = []
+for xml_path in sorted(reports_dir.glob("*.xml")):
+    tests = failures = errors = skipped = 0
+    name = xml_path.stem
+    try:
+        root = ET.parse(xml_path).getroot()
+        suite = root.find("testsuite")
+        if suite is not None:
+            name = suite.attrib.get("name", name)
+            tests = int(suite.attrib.get("tests", "0"))
+            failures = int(suite.attrib.get("failures", "0"))
+            errors = int(suite.attrib.get("errors", "0"))
+            skipped = int(suite.attrib.get("skipped", "0"))
+    except Exception:
+        failures = 1
+
+    passed = max(0, tests - failures - errors - skipped)
+    rate = (passed / tests * 100.0) if tests > 0 else 0.0
+    leaf = html_root / xml_path.stem
+    leaf.mkdir(parents=True, exist_ok=True)
+    leaf_index = leaf / "index.html"
+    leaf_index.write_text(
+        """<!doctype html>
+<html lang=\"en\"><head><meta charset=\"utf-8\"><title>{title}</title></head>
+<body><h1>{title}</h1>
+<p>tests={tests} passed={passed} failures={failures} errors={errors} skipped={skipped} pass_rate={rate:.2f}%</p>
+<p><a href=\"../../junit/{xml}\">Open JUnit XML</a></p>
+</body></html>
+""".format(
+            title=html.escape(name),
+            tests=tests,
+            passed=passed,
+            failures=failures,
+            errors=errors,
+            skipped=skipped,
+            rate=rate,
+            xml=html.escape(xml_path.name),
+        ),
+        encoding="utf-8",
+    )
+
+    rows.append(
+        f"<tr><td><a href=\"{html.escape(xml_path.stem)}/index.html\">{html.escape(name)}</a></td>"
+        f"<td>{tests}</td><td>{passed}</td><td>{failures}</td><td>{errors}</td><td>{skipped}</td><td>{rate:.2f}%</td></tr>"
+    )
+
+index = html_root / "index.html"
+index.write_text(
+    "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>PGO Gather Test Report</title></head>"
+    "<body><h1>PGO Gather Test Report</h1><table border=\"1\" cellpadding=\"6\" cellspacing=\"0\">"
+    "<thead><tr><th>Suite</th><th>Tests</th><th>Passed</th><th>Failures</th><th>Errors</th><th>Skipped</th><th>Pass rate</th></tr></thead>"
+    f"<tbody>{''.join(rows)}</tbody></table></body></html>",
+    encoding="utf-8",
+)
+PY
 }
 
 run_collect_tests_default() {
@@ -95,6 +189,7 @@ run_collect_tests_default() {
   local reports_root
   local reports_dir
   local logs_dir
+  local html_dir
   local suite_entry
   local label
   local filter
@@ -105,8 +200,9 @@ run_collect_tests_default() {
   reports_root="$CPP_ROOT/.kano/tmp/pgo/gather-reports"
   reports_dir="$reports_root/junit"
   logs_dir="$reports_root/logs"
+  html_dir="$reports_root/html"
 
-  mkdir -p "$reports_dir" "$logs_dir"
+  mkdir -p "$reports_dir" "$logs_dir" "$html_dir"
 
   if is_windows_host; then
     exe_ext=".exe"
@@ -148,7 +244,10 @@ run_collect_tests_default() {
     fi
   done
 
+  render_junit_html_reports "$reports_dir" "$html_dir"
+
   echo "[pgo-gather] reports root: $reports_root" >&2
+  echo "[pgo-gather] html summary: $html_dir/index.html" >&2
 
   if [[ "$passed_count" -eq 0 ]]; then
     echo "[pgo-gather] all collect workloads failed; cannot gather usable profile" >&2
