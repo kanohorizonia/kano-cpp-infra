@@ -187,6 +187,33 @@ kano_cpp_infra_workspace_root() {
   (cd "$cpp_root/../.." && pwd)
 }
 
+_kano_cpp_infra_resolve_config_value() {
+  local section_name="$1"
+  local key_name="$2"
+  local workspace_root
+  local home_dir="${HOME:-}"
+  local value=""
+  local file_path=""
+
+  workspace_root="$(kano_cpp_infra_workspace_root)"
+
+  for file_path in \
+    "$workspace_root/.kano/kog_config.toml" \
+    "$home_dir/.kano/kog_config.toml" \
+    "$workspace_root/.kano/kano_cpp_infra_config.toml" \
+    "$home_dir/.kano/kano_cpp_infra_config.toml"; do
+    if [[ -f "$file_path" ]]; then
+      local candidate=""
+      candidate="$(_kano_cpp_infra_extract_toml_section_value "$file_path" "$section_name" "$key_name")"
+      if [[ -n "$candidate" ]]; then
+        value="$candidate"
+      fi
+    fi
+  done
+
+  printf '%s' "$value"
+}
+
 _kano_cpp_infra_extract_toml_section_value() {
   local file_path="$1"
   local section_name="$2"
@@ -224,26 +251,93 @@ _kano_cpp_infra_extract_toml_section_value() {
 }
 
 kano_cpp_infra_resolve_self_config_value() {
-  local key_name="$1"
-  local workspace_root
-  local home_dir="${HOME:-}"
-  local value=""
-  local file_path=""
-  workspace_root="$(kano_cpp_infra_workspace_root)"
+  _kano_cpp_infra_resolve_config_value "self" "$1"
+}
 
-  for file_path in \
-    "$workspace_root/.kano/kano_cpp_infra_config.toml" \
-    "$home_dir/.kano/kano_cpp_infra_config.toml"; do
-    if [[ -f "$file_path" ]]; then
-      local candidate=""
-      candidate="$(_kano_cpp_infra_extract_toml_section_value "$file_path" "self" "$key_name")"
-      if [[ -n "$candidate" ]]; then
-        value="$candidate"
-      fi
+kano_cpp_infra_resolve_toolchain_config_value() {
+  _kano_cpp_infra_resolve_config_value "toolchain" "$1"
+}
+
+_kano_cpp_infra_command_version_line() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -x "$candidate" ]]; then
+      "$candidate" --version 2>/dev/null | head -n 1 | tr -d '\r'
+      return 0
+    fi
+    if command -v "$candidate" >/dev/null 2>&1; then
+      "$candidate" --version 2>/dev/null | head -n 1 | tr -d '\r'
+      return 0
     fi
   done
+  return 0
+}
 
-  printf '%s' "$value"
+kano_cpp_print_self_build_toolchain() {
+  local platform
+  local configure_preset="${KANO_CPP_INFRA_BUILD_CONFIGURE_PRESET:-unknown}"
+  local build_preset="${KANO_CPP_INFRA_BUILD_BUILD_PRESET:-unknown}"
+  local launcher="${KANO_CPP_INFRA_COMPILER_LAUNCHER_RESOLVED:-${KOG_COMPILER_LAUNCHER:-none}}"
+  local summary="toolchain=unknown"
+  local version_line=""
+  local preferred_version=""
+
+  platform="$(uname -s 2>/dev/null || printf 'unknown')"
+
+  case "$configure_preset" in
+    *msvc*)
+      summary="toolchain=msvc"
+      preferred_version="${KANO_VCVARS_VERSION:-$(kano_cpp_infra_resolve_toolchain_config_value "msvc_preferred_version")}" 
+      preferred_version="$(_kano_cpp_infra_trim "$preferred_version")"
+      if [[ -n "$preferred_version" ]]; then
+        summary+=" vcvars_ver=$preferred_version"
+      fi
+      ;;
+    *gcc*)
+      summary="toolchain=gcc"
+      version_line="$(_kano_cpp_infra_command_version_line gcc g++)"
+      ;;
+    *clang*)
+      summary="toolchain=clang"
+      if [[ "$platform" == Darwin && "${INF_BUILD_USE_LLVM:-${KOG_BUILD_USE_LLVM:-1}}" == "1" && -n "${KANO_CPP_INFRA_LLVM_PREFIX:-}" && -x "$KANO_CPP_INFRA_LLVM_PREFIX/bin/clang" ]]; then
+        version_line="$(_kano_cpp_infra_command_version_line "$KANO_CPP_INFRA_LLVM_PREFIX/bin/clang")"
+      elif [[ "$platform" == Darwin ]]; then
+        version_line="$(_kano_cpp_infra_command_version_line clang)"
+      else
+        version_line="$(_kano_cpp_infra_command_version_line clang clang++)"
+      fi
+      ;;
+    *)
+      case "$platform" in
+        MINGW*|MSYS*|CYGWIN*)
+          summary="toolchain=msvc"
+          preferred_version="${KANO_VCVARS_VERSION:-$(kano_cpp_infra_resolve_toolchain_config_value "msvc_preferred_version")}" 
+          preferred_version="$(_kano_cpp_infra_trim "$preferred_version")"
+          if [[ -n "$preferred_version" ]]; then
+            summary+=" vcvars_ver=$preferred_version"
+          fi
+          ;;
+        Darwin)
+          summary="toolchain=clang"
+          if [[ -n "${KANO_CPP_INFRA_LLVM_PREFIX:-}" && -x "$KANO_CPP_INFRA_LLVM_PREFIX/bin/clang" ]]; then
+            version_line="$(_kano_cpp_infra_command_version_line "$KANO_CPP_INFRA_LLVM_PREFIX/bin/clang")"
+          else
+            version_line="$(_kano_cpp_infra_command_version_line clang)"
+          fi
+          ;;
+        *)
+          summary="toolchain=clang"
+          version_line="$(_kano_cpp_infra_command_version_line clang clang++)"
+          ;;
+      esac
+      ;;
+  esac
+
+  if [[ -n "$version_line" ]]; then
+    summary+=" compiler_version=\"$version_line\""
+  fi
+
+  echo "$(_kano_cpp_infra_log_prefix "[launcher]" "$_KOG_CLR_BOLD_GREEN")[toolchain][info] preset=$configure_preset build=$build_preset launcher=$launcher $summary" >&2
 }
 
 kano_cpp_apply_self_build_config() {

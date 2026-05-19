@@ -3,6 +3,8 @@ set -euo pipefail
 
 KANO_INFRA_UNIX_PRESET_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+  export KANO_CPP_INFRA_BUILD_CONFIGURE_PRESET="$in_configure_preset"
+  export KANO_CPP_INFRA_BUILD_BUILD_PRESET="$in_build_preset"
 # Bootstrap pixi environment if not already active.
 # shellcheck source=/dev/null
 source "$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/pixi_bootstrap.sh"
@@ -63,6 +65,7 @@ KANO_CACHE_ARGS_PY
 
   if [[ "$(uname -s 2>/dev/null || true)" == "Darwin" && "${INF_BUILD_USE_LLVM:-${KOG_BUILD_USE_LLVM:-0}}" == "1" ]]; then
     llvm_prefix="$(brew --prefix llvm 2>/dev/null || true)"
+    export KANO_CPP_INFRA_LLVM_PREFIX="$llvm_prefix"
     if [[ -z "$llvm_prefix" || ! -x "$llvm_prefix/bin/clang" || ! -x "$llvm_prefix/bin/clang++" ]]; then
       echo "Homebrew LLVM is required for --llvm mode. Install with: brew install llvm" >&2
       return 1
@@ -91,6 +94,7 @@ KANO_CACHE_ARGS_PY
     cd "$INF_CPP_ROOT"
     kano_cpp_apply_self_build_config
     kano_cpp_collect_build_metadata
+    kano_cpp_print_self_build_toolchain
     cmake --preset "$in_configure_preset" "${extra_args[@]}" "${cache_override_args[@]}"
     cmake --build --preset "$in_build_preset"
   )

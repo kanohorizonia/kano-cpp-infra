@@ -119,6 +119,10 @@ kano_windows_run_preset() {
 
   kano_windows_apply_self_build_config
   kano_windows_collect_build_metadata
+  export KANO_CPP_INFRA_BUILD_CONFIGURE_PRESET="$in_configure_preset"
+  export KANO_CPP_INFRA_BUILD_BUILD_PRESET="$in_build_preset"
+  export KANO_CPP_INFRA_LLVM_PREFIX=""
+  kano_cpp_print_self_build_toolchain
 
   kano_windows_run_ps_helper \
     -Action run-preset \
