@@ -96,27 +96,57 @@ ensure_windows_pgo_runtime_path() {
 
 # ─── Coverage helpers ────────────────────────────────────────────────────────
 
-_has_dotnet_coverage() {
-  command -v dotnet-coverage >/dev/null 2>&1
+_has_opencppcoverage() {
+  command -v OpenCppCoverage.exe >/dev/null 2>&1 || \
+    [[ -x "/c/Program Files/OpenCppCoverage/OpenCppCoverage.exe" ]]
 }
 
 _has_reportgenerator() {
   command -v reportgenerator >/dev/null 2>&1
 }
 
-# Run a test binary, optionally wrapping with dotnet-coverage for coverage collection.
+# Convert MSYS2/Unix path to Windows path for tools that need it.
+_to_win_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$1"
+  else
+    # Fallback: convert /c/Foo → C:\Foo
+    printf '%s' "$1" | sed 's|^/\([a-zA-Z]\)/|\1:\\|;s|/|\\|g'
+  fi
+}
+
+# Run a test binary, optionally wrapping with OpenCppCoverage for coverage collection.
 # Usage: _run_with_coverage <coverage_xml_out|""> <binary> [args...]
-# When coverage_xml_out is non-empty and dotnet-coverage is available, the binary
-# is executed under "dotnet-coverage collect --output <file> --output-format cobertura".
+# When coverage_xml_out is non-empty and OpenCppCoverage is available the binary
+# is executed under OpenCppCoverage --export-type cobertura.
 # The child exit code is forwarded so callers can still detect test failures.
 _run_with_coverage() {
   local coverage_out="$1"
   shift
-  if [[ -n "$coverage_out" ]] && _has_dotnet_coverage; then
-    dotnet-coverage collect \
-      --output "$coverage_out" \
-      --output-format cobertura \
-      -- "$@"
+  if [[ -n "$coverage_out" ]] && _has_opencppcoverage; then
+    local occ_bin
+    if command -v OpenCppCoverage.exe >/dev/null 2>&1; then
+      occ_bin="$(command -v OpenCppCoverage.exe)"
+    else
+      occ_bin="/c/Program Files/OpenCppCoverage/OpenCppCoverage.exe"
+    fi
+
+    local src_win
+    src_win="$(_to_win_path "$CPP_ROOT/code")"
+    local cov_win
+    cov_win="$(_to_win_path "$coverage_out")"
+
+    # Extract binary (first arg) and convert its path; keep remaining args as-is.
+    local binary="$1"; shift
+    local binary_win
+    binary_win="$(_to_win_path "$binary")"
+
+    mkdir -p "$(dirname "$coverage_out")"
+    "$occ_bin" \
+      --sources "$src_win" \
+      --export_type "cobertura:$cov_win" \
+      --quiet \
+      -- "$binary_win" "$@"
   else
     "$@"
   fi
@@ -337,10 +367,10 @@ run_collect_tests_default() {
     ensure_windows_pgo_runtime_path
   fi
 
-  if _has_dotnet_coverage; then
-    echo "[pgo-gather] coverage collection: dotnet-coverage (output: $coverage_raw_dir)" >&2
+  if _has_opencppcoverage; then
+    echo "[pgo-gather] coverage collection: OpenCppCoverage (output: $coverage_raw_dir)" >&2
   else
-    echo "[pgo-gather] coverage collection: disabled (dotnet-coverage not found)" >&2
+    echo "[pgo-gather] coverage collection: disabled (OpenCppCoverage not found)" >&2
   fi
 
   echo "[pgo-gather] using gather mode: $gather_mode, preset: $preset_name" >&2
