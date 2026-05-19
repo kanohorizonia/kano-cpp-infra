@@ -94,16 +94,95 @@ ensure_windows_pgo_runtime_path() {
   return 0
 }
 
+# ─── Coverage helpers ────────────────────────────────────────────────────────
+
+_has_dotnet_coverage() {
+  command -v dotnet-coverage >/dev/null 2>&1
+}
+
+_has_reportgenerator() {
+  command -v reportgenerator >/dev/null 2>&1
+}
+
+# Run a test binary, optionally wrapping with dotnet-coverage for coverage collection.
+# Usage: _run_with_coverage <coverage_xml_out|""> <binary> [args...]
+# When coverage_xml_out is non-empty and dotnet-coverage is available, the binary
+# is executed under "dotnet-coverage collect --output <file> --output-format cobertura".
+# The child exit code is forwarded so callers can still detect test failures.
+_run_with_coverage() {
+  local coverage_out="$1"
+  shift
+  if [[ -n "$coverage_out" ]] && _has_dotnet_coverage; then
+    dotnet-coverage collect \
+      --output "$coverage_out" \
+      --output-format cobertura \
+      -- "$@"
+  else
+    "$@"
+  fi
+}
+
+# Generate HTML coverage report from all .cobertura.xml files in raw_dir.
+generate_coverage_html() {
+  local raw_dir="$1"
+  local html_dir="$2"
+
+  if ! _has_reportgenerator; then
+    echo "[pgo-gather] skipping coverage HTML: reportgenerator not available" >&2
+    return 0
+  fi
+
+  local -a xml_files=()
+  while IFS= read -r -d '' f; do
+    xml_files+=("$f")
+  done < <(find "$raw_dir" -name "*.cobertura.xml" -type f -print0 2>/dev/null || true)
+
+  if [[ ${#xml_files[@]} -eq 0 ]]; then
+    echo "[pgo-gather] no .cobertura.xml files found; skipping coverage HTML" >&2
+    return 0
+  fi
+
+  echo "[pgo-gather] generating coverage HTML from ${#xml_files[@]} report(s)" >&2
+  mkdir -p "$html_dir"
+
+  # Build semicolon-separated report list for reportgenerator
+  local reports
+  printf -v reports '%s;' "${xml_files[@]}"
+  reports="${reports%;}"
+
+  reportgenerator \
+    -reports:"$reports" \
+    -targetdir:"$html_dir" \
+    -reporttypes:Html \
+    -title:"PGO Gather Coverage Report" \
+    >/dev/null 2>&1 || {
+    echo "[pgo-gather] warning: reportgenerator failed" >&2
+    return 0
+  }
+
+  echo "[pgo-gather] coverage HTML: $html_dir/index.html" >&2
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 run_collect_case() {
   local in_candidate="$1"
   local in_label="$2"
   local in_filter="$3"
   local in_reports_dir="$4"
   local in_logs_dir="$5"
+  local in_coverage_dir="${6:-}"
 
   local report_path="$in_reports_dir/$in_label.xml"
   local report_tmp="$report_path.tmp"
   local log_path="$in_logs_dir/$in_label.log"
+
+  local cov_filter=""
+  local cov_fallback=""
+  if [[ -n "$in_coverage_dir" ]]; then
+    cov_filter="$in_coverage_dir/${in_label}_filter.cobertura.xml"
+    cov_fallback="$in_coverage_dir/${in_label}_fallback.cobertura.xml"
+  fi
 
   local -a args
   local -a reporter_args=(--reporter junit --out "$report_path")
@@ -117,7 +196,7 @@ run_collect_case() {
   rm -f "$report_tmp"
 
   echo "[pgo-gather] running $in_label (${in_filter:-all-tests})" >&2
-  if "$in_candidate" "${args[@]}" >"$log_path" 2>&1; then
+  if _run_with_coverage "$cov_filter" "$in_candidate" "${args[@]}" >"$log_path" 2>&1; then
     mv -f "$report_tmp" "$report_path"
     echo "[pgo-gather] pass $in_label" >&2
     return 0
@@ -125,7 +204,7 @@ run_collect_case() {
 
   echo "[pgo-gather] warning: $in_label failed for filter '${in_filter:-all-tests}', retry full binary" >&2
   rm -f "$report_tmp"
-  if "$in_candidate" --order lex --rng-seed 1337 "${reporter_args_tmp[@]}" >"$log_path" 2>&1; then
+  if _run_with_coverage "$cov_fallback" "$in_candidate" --order lex --rng-seed 1337 "${reporter_args_tmp[@]}" >"$log_path" 2>&1; then
     mv -f "$report_tmp" "$report_path"
     echo "[pgo-gather] pass $in_label (fallback all-tests)" >&2
     return 0
@@ -245,8 +324,10 @@ run_collect_tests_default() {
   reports_dir="$reports_root/junit"
   logs_dir="$reports_root/logs"
   html_dir="$reports_root/html"
+  local coverage_raw_dir="$reports_root/coverage/raw"
+  local coverage_html_dir="$reports_root/coverage/html"
 
-  mkdir -p "$reports_dir" "$logs_dir" "$html_dir"
+  mkdir -p "$reports_dir" "$logs_dir" "$html_dir" "$coverage_raw_dir"
 
   if is_windows_host; then
     exe_ext=".exe"
@@ -254,6 +335,12 @@ run_collect_tests_default() {
 
   if [[ "$gather_mode" == "pgo" ]]; then
     ensure_windows_pgo_runtime_path
+  fi
+
+  if _has_dotnet_coverage; then
+    echo "[pgo-gather] coverage collection: dotnet-coverage (output: $coverage_raw_dir)" >&2
+  else
+    echo "[pgo-gather] coverage collection: disabled (dotnet-coverage not found)" >&2
   fi
 
   echo "[pgo-gather] using gather mode: $gather_mode, preset: $preset_name" >&2
@@ -283,7 +370,7 @@ run_collect_tests_default() {
       echo "[pgo-gather] warning: $label failed --list-tests preflight; continuing" >&2
     fi
 
-    if run_collect_case "$candidate" "$label" "$filter" "$reports_dir" "$logs_dir"; then
+    if run_collect_case "$candidate" "$label" "$filter" "$reports_dir" "$logs_dir" "$coverage_raw_dir"; then
       passed_count=$((passed_count + 1))
     else
       failed_count=$((failed_count + 1))
@@ -291,6 +378,7 @@ run_collect_tests_default() {
   done
 
   render_junit_html_reports "$reports_dir" "$html_dir"
+  generate_coverage_html "$coverage_raw_dir" "$coverage_html_dir"
 
   echo "[pgo-gather] reports root: $reports_root" >&2
   echo "[pgo-gather] html summary: $html_dir/index.html" >&2
