@@ -1,4 +1,27 @@
 #!/usr/bin/env bash
+# ============================================================================
+# PGO Gather Script - Unified PGO + Coverage Profile Collection
+# ============================================================================
+# Runs representative test suites with instrumentation to collect profile data
+# for Profile-Guided Optimization (PGO) or code coverage analysis.
+#
+# USAGE:
+#   ./pgo-gather.sh                    # Default: PGO mode
+#   KANO_CPP_INFRA_PGO_GATHER_MODE=coverage ./pgo-gather.sh  # Coverage mode
+#
+# MODES:
+#   pgo (default)  - Uses *-pgo-collect presets for PGO optimization profiling
+#   coverage       - Uses *-coverage presets for code coverage instrumentation
+#                    (unified gathering, produces both PGO and coverage reports)
+#
+# ENVIRONMENT VARIABLES:
+#   KANO_CPP_INFRA_PGO_GATHER_MODE
+#       Set to 'coverage' to use coverage presets instead of PGO presets.
+#       Useful for obtaining complete test coverage data while gathering profiles.
+#
+#   KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET
+#       Override the auto-detected preset name.
+# ============================================================================
 
 set -euo pipefail
 
@@ -6,11 +29,31 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-$(cd -- "$SCRIPT_DIR/../../../.." && pwd)}"
 
 resolve_collect_preset() {
+  local gather_mode="${KANO_CPP_INFRA_PGO_GATHER_MODE:-pgo}"
+  
   if [[ -n "${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-}" ]]; then
     printf '%s\n' "$KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET"
     return 0
   fi
 
+  if [[ "$gather_mode" == "coverage" ]]; then
+    # Use coverage presets to gather data (unified with PGO collect for comprehensive testing)
+    if [[ "$(uname -s 2>/dev/null || true)" == MINGW* || "$(uname -s 2>/dev/null || true)" == MSYS* || "$(uname -s 2>/dev/null || true)" == CYGWIN* ]]; then
+      printf '%s\n' "windows-ninja-msvc-coverage"
+      return 0
+    elif [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+      if [[ "$(uname -m 2>/dev/null || true)" == "arm64" ]]; then
+        printf '%s\n' "macos-ninja-clang-arm64-coverage"
+      else
+        printf '%s\n' "macos-ninja-clang-x64-coverage"
+      fi
+      return 0
+    fi
+    printf '%s\n' "linux-ninja-clang-coverage"
+    return 0
+  fi
+
+  # Default: PGO collect mode
   if [[ "$(uname -s 2>/dev/null || true)" == MINGW* || "$(uname -s 2>/dev/null || true)" == MSYS* || "$(uname -s 2>/dev/null || true)" == CYGWIN* ]]; then
     printf '%s\n' "windows-ninja-msvc-pgo-collect"
     return 0
@@ -194,6 +237,7 @@ run_collect_tests_default() {
   local label
   local filter
   local candidate
+  local gather_mode="${KANO_CPP_INFRA_PGO_GATHER_MODE:-pgo}"
 
   preset_name="$(resolve_collect_preset)"
   bin_root="$CPP_ROOT/out/bin/$preset_name/debug"
@@ -208,9 +252,11 @@ run_collect_tests_default() {
     exe_ext=".exe"
   fi
 
-  ensure_windows_pgo_runtime_path
+  if [[ "$gather_mode" == "pgo" ]]; then
+    ensure_windows_pgo_runtime_path
+  fi
 
-  # Coverage-guided representative defaults:
+  echo "[pgo-gather] using gather mode: $gather_mode, preset: $preset_name" >&2
   # - CLI functional path
   # - commit-plan engine + properties
   # - export/archive paths
