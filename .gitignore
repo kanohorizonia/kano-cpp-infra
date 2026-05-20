@@ -1,2 +1,3 @@
 # Ignore local Kano agent artifacts and temporary files
 .kano/
+/LastCoverageResults.log

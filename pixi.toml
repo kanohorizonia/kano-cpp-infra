@@ -43,6 +43,7 @@ scripts = ["scripts/win64-activate.bat"]
 [target.win-64.tasks]
 # Bootstrap
 bootstrap-system = "bash scripts/platform/win64/prerequisite.ps1"
+ensure-coverage-tools = "bash scripts/stages/ensure-coverage-tools.sh"
 
 # Development build (Debug preset - fast iteration)
 build-debug = "bash scripts/self/build-debug.sh"
@@ -61,6 +62,7 @@ skill-report-coverage = "bash scripts/stages/coverage-report.sh"
 skill-report-coverage-opencppcoverage = "bash scripts/stages/coverage-report.sh opencppcoverage"
 test-report = "bash scripts/stages/test-report.sh"
 pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
+pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pgo-rebuild.sh"
 
 # Full coverage workflow: build + test + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
@@ -72,6 +74,7 @@ full-test = "bash ../../code/tests/run_tests.sh windows-ninja-msvc-release --wit
 [target.linux-64.tasks]
 # Bootstrap
 bootstrap-system = "bash scripts/platform/linux/prerequisite.sh"
+ensure-coverage-tools = "bash scripts/stages/ensure-coverage-tools.sh"
 
 # Development build (Debug preset - fast iteration)
 build-debug = "bash scripts/platform/linux/native-build.sh"
@@ -88,6 +91,7 @@ report-coverage = "bash scripts/stages/coverage-report.sh"
 skill-report-coverage = "bash scripts/stages/coverage-report.sh"
 test-report = "bash scripts/stages/test-report.sh"
 pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
+pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pgo-rebuild.sh"
 
 # Full coverage workflow: build + test + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
@@ -99,6 +103,7 @@ full-test = "bash ../../../code/tests/run_tests.sh linux-ninja-gcc-release --wit
 [target.osx-64.tasks]
 # Development build (Debug preset - fast iteration)
 build-debug = "bash scripts/platform/mac/native-build.sh"
+ensure-coverage-tools = "bash scripts/stages/ensure-coverage-tools.sh"
 
 # Release build (optimized)
 build-release = "bash scripts/self/build.sh"
@@ -115,6 +120,7 @@ report-coverage = "bash scripts/stages/coverage-report.sh"
 skill-report-coverage = "bash scripts/stages/coverage-report.sh"
 test-report = "bash scripts/stages/test-report.sh"
 pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
+pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pgo-rebuild.sh"
 
 # Full coverage workflow: build + test + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
@@ -126,6 +132,7 @@ full-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-x64-release
 [target.osx-arm64.tasks]
 # Development build (Debug preset - fast iteration)
 build-debug = "bash scripts/platform/mac/native-build.sh"
+ensure-coverage-tools = "bash scripts/stages/ensure-coverage-tools.sh"
 
 # Release build (optimized)
 build-release = "bash scripts/self/build.sh"
@@ -142,6 +149,7 @@ report-coverage = "bash scripts/stages/coverage-report.sh"
 skill-report-coverage = "bash scripts/stages/coverage-report.sh"
 test-report = "bash scripts/stages/test-report.sh"
 pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
+pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pgo-rebuild.sh"
 
 # Full coverage workflow: build + test + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
