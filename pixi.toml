@@ -61,8 +61,11 @@ report-coverage-opencppcoverage = "bash scripts/platform/win64/ninja-msvc-covera
 skill-report-coverage = "bash scripts/stages/coverage-report.sh"
 skill-report-coverage-opencppcoverage = "bash scripts/stages/coverage-report.sh opencppcoverage"
 test-report = "bash scripts/stages/test-report.sh"
+pgo-gather = "KANO_CXX_PROFILE_RUN_MODE=pgo-gather KANO_CPP_INFRA_PGO_REBUILD_SKIP_USE=1 bash scripts/workflows/pgo-rebuild.sh"
 pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
 pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pgo-rebuild.sh"
+pgo-gather-with-coverage = "bash scripts/workflows/pgo-gather-with-coverage.sh"
+profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 
 # Full coverage workflow: build + test + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
@@ -90,8 +93,11 @@ test-coverage = "bash scripts/stages/coverage-gather.sh"
 report-coverage = "bash scripts/stages/coverage-report.sh"
 skill-report-coverage = "bash scripts/stages/coverage-report.sh"
 test-report = "bash scripts/stages/test-report.sh"
+pgo-gather = "KANO_CXX_PROFILE_RUN_MODE=pgo-gather KANO_CPP_INFRA_PGO_REBUILD_SKIP_USE=1 bash scripts/workflows/pgo-rebuild.sh"
 pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
 pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pgo-rebuild.sh"
+pgo-gather-with-coverage = "bash scripts/workflows/pgo-gather-with-coverage.sh"
+profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 
 # Full coverage workflow: build + test + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
@@ -119,8 +125,11 @@ test-coverage = "bash scripts/stages/coverage-gather.sh"
 report-coverage = "bash scripts/stages/coverage-report.sh"
 skill-report-coverage = "bash scripts/stages/coverage-report.sh"
 test-report = "bash scripts/stages/test-report.sh"
+pgo-gather = "KANO_CXX_PROFILE_RUN_MODE=pgo-gather KANO_CPP_INFRA_PGO_REBUILD_SKIP_USE=1 bash scripts/workflows/pgo-rebuild.sh"
 pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
 pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pgo-rebuild.sh"
+pgo-gather-with-coverage = "bash scripts/workflows/pgo-gather-with-coverage.sh"
+profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 
 # Full coverage workflow: build + test + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
@@ -148,8 +157,11 @@ test-coverage = "bash scripts/stages/coverage-gather.sh"
 report-coverage = "bash scripts/stages/coverage-report.sh"
 skill-report-coverage = "bash scripts/stages/coverage-report.sh"
 test-report = "bash scripts/stages/test-report.sh"
+pgo-gather = "KANO_CXX_PROFILE_RUN_MODE=pgo-gather KANO_CPP_INFRA_PGO_REBUILD_SKIP_USE=1 bash scripts/workflows/pgo-rebuild.sh"
 pgo-rebuild = "bash scripts/workflows/pgo-rebuild.sh"
 pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pgo-rebuild.sh"
+pgo-gather-with-coverage = "bash scripts/workflows/pgo-gather-with-coverage.sh"
+profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 
 # Full coverage workflow: build + test + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"

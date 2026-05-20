@@ -11,6 +11,7 @@ UNIX_PRESET_BUILD_SH="$LIB_ROOT/unix_preset_build.sh"
 WINDOWS_PRESET_BUILD_SH="$LIB_ROOT/windows_preset_build.sh"
 PGO_GATHER_SH="$STAGES_ROOT/pgo-gather.sh"
 PGO_WORKFLOW_SH="$LIB_ROOT/pgo_workflow.sh"
+PROFILE_MANIFEST_SH="$STAGES_ROOT/profile-run-manifest.sh"
 
 require_file() {
   local in_path="$1"
@@ -266,6 +267,38 @@ run_gather_stage() {
   bash "$PGO_GATHER_SH"
 }
 
+resolve_profile_manifest() {
+  local mode="${KANO_CXX_PROFILE_RUN_MODE:-pgo-rebuild}"
+  local compiler="${KANO_CXX_COMPILER:-}"
+  local coverage_provider="${KANO_CXX_COVERAGE_PROVIDER:-${KANO_CPP_INFRA_COVERAGE_TOOL:-none}}"
+  local pgo_provider="${KANO_CXX_PGO_PROVIDER:-}"
+
+  if [[ -z "$compiler" ]]; then
+    if is_windows_host; then
+      compiler="msvc"
+    else
+      compiler="clang"
+    fi
+  fi
+
+  if [[ -z "$pgo_provider" ]]; then
+    if [[ "$compiler" == "msvc" ]]; then
+      pgo_provider="msvc-pgo"
+    elif [[ "$compiler" == "clang" ]]; then
+      pgo_provider="llvm-profdata"
+    else
+      pgo_provider="none"
+    fi
+  fi
+
+  export KANO_CXX_PROFILE_RUN_MODE="$mode"
+  export KANO_CXX_COMPILER="$compiler"
+  export KANO_CXX_COVERAGE_PROVIDER="$coverage_provider"
+  export KANO_CXX_PGO_PROVIDER="$pgo_provider"
+
+  bash "$PROFILE_MANIFEST_SH" "$mode"
+}
+
 archive_microsoft_coverage_reports() {
   local src="$CPP_ROOT/.kano/tmp/pgo/gather-reports"
   local dst="$CPP_ROOT/.kano/tmp/pgo/gather-reports-microsoft"
@@ -333,6 +366,9 @@ main() {
   require_file "$WINDOWS_PRESET_BUILD_SH"
   require_file "$PGO_GATHER_SH"
   require_file "$PGO_WORKFLOW_SH"
+  require_file "$PROFILE_MANIFEST_SH"
+
+  resolve_profile_manifest
 
   if is_windows_host && [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "microsoft" ]]; then
     echo "[pgo] split pipeline enabled: Microsoft coverage prepass + PGO collect/use" >&2
@@ -343,6 +379,12 @@ main() {
 
   run_collect_build
   run_gather_stage
+
+  if [[ "${KANO_CPP_INFRA_PGO_REBUILD_SKIP_USE:-0}" == "1" ]]; then
+    echo "[pgo] gather-only mode enabled; skipping merge/use rebuild stage" >&2
+    return 0
+  fi
+
   bash "$PGO_WORKFLOW_SH" merge
   copy_msvc_pgd_to_use_dir
   run_use_build
