@@ -78,6 +78,34 @@ is_macos_host() {
   [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]
 }
 
+default_coverage_configure_preset() {
+  if is_windows_host; then
+    first_existing_preset windows-ninja-msvc-coverage windows-ninja-msvc
+  elif is_macos_host; then
+    if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
+      first_existing_preset macos-ninja-clang-arm64-coverage macos-ninja-clang-arm64 macos-ninja-clang-coverage macos-ninja-clang
+    else
+      first_existing_preset macos-ninja-clang-x64-coverage macos-ninja-clang-x64 macos-ninja-clang-coverage macos-ninja-clang
+    fi
+  else
+    first_existing_preset linux-ninja-clang-coverage linux-ninja-gcc-coverage linux-ninja-clang linux-ninja-gcc
+  fi
+}
+
+default_coverage_build_preset() {
+  if is_windows_host; then
+    first_existing_preset windows-ninja-msvc-coverage-debug windows-ninja-msvc-debug
+  elif is_macos_host; then
+    if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
+      first_existing_preset macos-ninja-clang-arm64-coverage-debug macos-ninja-clang-arm64-debug macos-ninja-clang-coverage-debug macos-ninja-clang-debug
+    else
+      first_existing_preset macos-ninja-clang-x64-coverage-debug macos-ninja-clang-x64-debug macos-ninja-clang-coverage-debug macos-ninja-clang-debug
+    fi
+  else
+    first_existing_preset linux-ninja-clang-coverage-debug linux-ninja-gcc-coverage-debug linux-ninja-clang-debug linux-ninja-gcc-debug
+  fi
+}
+
 default_collect_configure_preset() {
   if is_windows_host; then
     first_existing_preset windows-ninja-msvc-pgo-collect windows-ninja-msvc windows-ninja-clang-pgo-collect windows-ninja-clang
@@ -238,12 +266,80 @@ run_gather_stage() {
   bash "$PGO_GATHER_SH"
 }
 
+archive_microsoft_coverage_reports() {
+  local src="$CPP_ROOT/.kano/tmp/pgo/gather-reports"
+  local dst="$CPP_ROOT/.kano/tmp/pgo/gather-reports-microsoft"
+  if [[ ! -d "$src" ]]; then
+    return 0
+  fi
+  rm -rf "$dst"
+  mkdir -p "$(dirname "$dst")"
+  cp -R "$src" "$dst"
+  echo "[pgo] archived Microsoft coverage reports: $dst" >&2
+}
+
+run_microsoft_coverage_prepass() {
+  local configure_preset="${KANO_CPP_INFRA_COVERAGE_CONFIGURE_PRESET:-$(default_coverage_configure_preset)}"
+  local build_preset="${KANO_CPP_INFRA_COVERAGE_BUILD_PRESET:-$(default_coverage_build_preset)}"
+  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_gather_mode="${KANO_CPP_INFRA_PGO_GATHER_MODE:-}"
+  local original_collect_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-}"
+  local original_coverage_tool="${KANO_CPP_INFRA_COVERAGE_TOOL:-}"
+
+  echo "[pgo] Microsoft coverage prepass: preset=$configure_preset" >&2
+
+  export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
+
+  if is_windows_host; then
+    # shellcheck disable=SC1090
+    source "$WINDOWS_PRESET_BUILD_SH"
+    kano_windows_run_preset "$configure_preset" "$build_preset" "${KANO_CPP_INFRA_VCVARS_ARCH:-x64}"
+  else
+    # shellcheck disable=SC1090
+    source "$UNIX_PRESET_BUILD_SH"
+    kano_cpp_infra_run_unix_preset "$configure_preset" "$build_preset"
+  fi
+
+  export KANO_CPP_INFRA_PGO_GATHER_MODE="coverage"
+  export KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET="$configure_preset"
+  export KANO_CPP_INFRA_COVERAGE_TOOL="microsoft"
+  run_gather_stage
+  archive_microsoft_coverage_reports
+
+  if [[ -n "$original_gather_mode" ]]; then
+    export KANO_CPP_INFRA_PGO_GATHER_MODE="$original_gather_mode"
+  else
+    unset KANO_CPP_INFRA_PGO_GATHER_MODE || true
+  fi
+
+  if [[ -n "$original_collect_preset" ]]; then
+    export KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET="$original_collect_preset"
+  else
+    unset KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET || true
+  fi
+
+  if [[ -n "$original_coverage_tool" ]]; then
+    export KANO_CPP_INFRA_COVERAGE_TOOL="$original_coverage_tool"
+  else
+    unset KANO_CPP_INFRA_COVERAGE_TOOL || true
+  fi
+}
+
 main() {
   require_file "$BUILD_METADATA_SH"
   require_file "$UNIX_PRESET_BUILD_SH"
   require_file "$WINDOWS_PRESET_BUILD_SH"
   require_file "$PGO_GATHER_SH"
   require_file "$PGO_WORKFLOW_SH"
+
+  if is_windows_host && [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "microsoft" ]]; then
+    echo "[pgo] split pipeline enabled: Microsoft coverage prepass + PGO collect/use" >&2
+    run_microsoft_coverage_prepass
+    # PGO gather should focus on profile data generation in split mode.
+    export KANO_CPP_INFRA_COVERAGE_TOOL="none"
+  fi
 
   run_collect_build
   run_gather_stage

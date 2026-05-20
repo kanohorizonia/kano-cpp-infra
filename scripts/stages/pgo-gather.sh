@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# PGO Gather Script - Unified PGO + Coverage Profile Collection
+# PGO Gather Script - PGO/Coverage Profile Collection
 # ============================================================================
 # Runs representative test suites with instrumentation to collect profile data
 # for Profile-Guided Optimization (PGO) or code coverage analysis.
@@ -11,8 +11,8 @@
 #
 # MODES:
 #   pgo (default)  - Uses *-pgo-collect presets for PGO optimization profiling
-#   coverage       - Uses *-coverage presets for code coverage instrumentation
-#                    (unified gathering, produces both PGO and coverage reports)
+#   coverage       - Uses *-coverage presets for coverage-first instrumentation
+#                    (for Microsoft coverage, runs instrument+collect flow)
 #
 # ENVIRONMENT VARIABLES:
 #   KANO_CPP_INFRA_PGO_GATHER_MODE
@@ -69,9 +69,25 @@ is_pgo_debug_enabled() {
   esac
 }
 
+is_pgo_verbose_enabled() {
+  local raw="${KANO_CPP_INFRA_PGO_VERBOSE:-}"
+  if [[ -z "$raw" ]]; then
+    raw="${KANO_CPP_INFRA_PGO_DEBUG:-0}"
+  fi
+  case "$raw" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 pgo_debug_log() {
   is_pgo_debug_enabled || return 0
   echo "[pgo-gather][debug] $*" >&2
+}
+
+pgo_verbose_log() {
+  is_pgo_verbose_enabled || return 0
+  echo "[pgo-gather][verbose] $*" >&2
 }
 
 dump_cobertura_debug_summary() {
@@ -359,16 +375,27 @@ _has_llvm_coverage() {
 # Convert a POSIX path (Git-Bash style /c/...) to a Windows native path (C:\...)
 _to_win_path() {
   local p="$1"
+
+  # Prefer cygpath when available for canonical Windows paths.
+  if command -v cygpath >/dev/null 2>&1; then
+    local converted
+    converted="$(cygpath -w "$p" 2>/dev/null || true)"
+    if [[ -n "$converted" ]]; then
+      printf '%s\n' "$converted"
+      return
+    fi
+  fi
+
   # Already a Windows path
   if [[ "$p" =~ ^[A-Za-z]:[/\\\\] ]]; then
-    printf '%s\n' "${p//\//\\\\}"
+    printf '%s\n' "${p//\//\\}"
     return
   fi
   # Git-Bash /drive/... form
   if [[ "$p" =~ ^/([a-zA-Z])(/.*)?$ ]]; then
     local drive="${BASH_REMATCH[1]}"
     local rest="${BASH_REMATCH[2]:-}"
-    rest="${rest//\//\\\\}"
+    rest="${rest//\//\\}"
     printf '%s:\\%s\n' "$(printf '%s' "$drive" | tr '[:lower:]' '[:upper:]')" "${rest#\\\\}"
     return
   fi
@@ -382,6 +409,7 @@ _run_with_coverage() {
   shift
 
   local coverage_tool="${KANO_CPP_INFRA_COVERAGE_TOOL:-}"
+  local gather_mode="${KANO_CPP_INFRA_PGO_GATHER_MODE:-pgo}"
 
   if [[ "$coverage_tool" == "microsoft" && -n "$coverage_out" ]] && _has_microsoft_codecoverage; then
     local codecov_bin
@@ -391,6 +419,11 @@ _run_with_coverage() {
     local exe_win
     exe_win="$(_to_win_path "$exe")"
     shift
+    local supports_instrument=0
+    if "$codecov_bin" --help 2>/dev/null | grep -qi "instrument"; then
+      supports_instrument=1
+    fi
+
     local ps_script="& '${exe_win//\'/\'\'}'"
     local _arg _arg_esc
     for _arg in "$@"; do
@@ -399,12 +432,43 @@ _run_with_coverage() {
     done
     local wrapped_command
     wrapped_command="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$ps_script\""
+
+    local cobertura_out_win
+    cobertura_out_win="$(cygpath -w "$cobertura_out" 2>/dev/null || printf '%s' "$cobertura_out")"
+    local settings_path="${cobertura_out%.cobertura.xml}.settings.xml"
+    local settings_win
+
     mkdir -p "$(dirname "$cobertura_out")"
+    cat > "$settings_path" <<EOF
+<Configuration>
+  <CodeCoverage>
+    <ModulePaths>
+      <IncludeDirectories>
+        <Directory>$(_to_win_path "$(dirname "$exe")")</Directory>
+      </IncludeDirectories>
+    </ModulePaths>
+  </CodeCoverage>
+</Configuration>
+EOF
+    settings_win="$(cygpath -w "$settings_path" 2>/dev/null || printf '%s' "$settings_path")"
+
     pgo_debug_log "provider=microsoft tool=$codecov_bin output=$cobertura_out"
+    pgo_debug_log "provider=microsoft supports-instrument=$supports_instrument"
+
+    if [[ "$supports_instrument" == "1" && "$gather_mode" == "coverage" ]]; then
+      pgo_debug_log "provider=microsoft instrument=$exe_win"
+      MSYS2_ARG_CONV_EXCL='*' "$codecov_bin" instrument "$exe_win"
+    elif [[ "$gather_mode" == "coverage" ]]; then
+      echo "[pgo-gather] warning: microsoft tool has no instrument command; using collect --settings compatibility path" >&2
+    else
+      echo "[pgo-gather] warning: microsoft coverage outside coverage mode is best-effort; prefer KANO_CPP_INFRA_PGO_GATHER_MODE=coverage" >&2
+    fi
+
     pgo_debug_log "provider=microsoft command=$wrapped_command"
-    "$codecov_bin" collect \
+    MSYS2_ARG_CONV_EXCL='*' "$codecov_bin" collect \
+      --settings "$settings_win" \
       --output-format cobertura \
-      --output "$(cygpath -w "$cobertura_out" 2>/dev/null || printf '%s' "$cobertura_out")" \
+      --output "$cobertura_out_win" \
       "$wrapped_command"
 
   elif [[ "$coverage_tool" == "opencppcoverage" && -n "$coverage_out" ]] && _has_opencppcoverage; then
@@ -672,6 +736,7 @@ run_collect_case() {
   local in_reports_dir="$4"
   local in_logs_dir="$5"
   local in_coverage_dir="${6:-}"
+  local in_progress="${7:-}"
 
   local report_path="$in_reports_dir/$in_label.xml"
   local report_tmp="$report_path.tmp"
@@ -707,7 +772,8 @@ run_collect_case() {
 
   rm -f "$report_tmp"
 
-  echo "[pgo-gather] running $in_label (${in_filter:-all-tests})" >&2
+  echo "[pgo-gather] running ${in_progress:+$in_progress }$in_label (${in_filter:-all-tests})" >&2
+  pgo_verbose_log "${in_progress:+$in_progress }log: $log_path"
   if _run_with_coverage "$cov_filter" "$in_candidate" "${args[@]}" >"$log_path" 2>&1; then
     if [[ -f "$report_tmp" ]]; then
       mv -f "$report_tmp" "$report_path"
@@ -720,6 +786,27 @@ run_collect_case() {
     mv -f "$report_tmp" "$report_path"
     echo "[pgo-gather] warning: $in_label exited non-zero but produced junit; preserving report" >&2
     return 0
+  fi
+
+  local fallback_disabled=0
+  if [[ "${KANO_CPP_INFRA_COVERAGE_DISABLE_FALLBACK:-1}" == "1" ]]; then
+    fallback_disabled=1
+    echo "[pgo-gather] fallback disabled: skipping full-binary/no-coverage retries for $in_label" >&2
+  fi
+
+  if [[ "$fallback_disabled" -eq 1 ]]; then
+    rm -f "$report_tmp"
+    cat > "$report_path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="$in_label" errors="0" failures="1" skipped="0" tests="1" time="0">
+    <testcase classname="$in_label" name="pgo-gather-run" time="0">
+      <failure message="pgo-gather execution failed with fallback disabled; inspect $log_path"/>
+    </testcase>
+  </testsuite>
+</testsuites>
+EOF
+    return 1
   fi
 
   echo "[pgo-gather] warning: $in_label failed for filter '${in_filter:-all-tests}', retry full binary" >&2
@@ -1142,12 +1229,16 @@ run_collect_tests_default() {
 
   # Auto-select coverage tool based on platform (can be overridden by KANO_CPP_INFRA_COVERAGE_TOOL)
   local coverage_tool="${KANO_CPP_INFRA_COVERAGE_TOOL:-}"
+  if [[ "$coverage_tool" == "none" ]]; then
+    coverage_tool=""
+  fi
+
   if [[ -z "$coverage_tool" ]]; then
     if is_windows_host; then
-      if _has_microsoft_codecoverage; then
-        coverage_tool="microsoft"
-      elif _has_opencppcoverage; then
+      if _has_opencppcoverage; then
         coverage_tool="opencppcoverage"
+      elif _has_microsoft_codecoverage; then
+        coverage_tool="microsoft"
       fi
     elif _has_llvm_coverage; then
       coverage_tool="llvm"
@@ -1196,11 +1287,17 @@ run_collect_tests_default() {
   fi
 
   local -a collected_binaries=()
+  local suite_total="${#suite[@]}"
+  local suite_index=0
+
+  echo "[pgo-gather] suite progress: 0/$suite_total queued" >&2
 
   for suite_entry in "${suite[@]}"; do
     IFS='|' read -r test_bin filter <<< "$suite_entry"
     label="${test_bin}"
     candidate="$bin_root/$test_bin$exe_ext"
+    suite_index=$((suite_index + 1))
+    local progress_tag="[$suite_index/$suite_total]"
 
     if [[ ! -f "$candidate" ]]; then
       echo "[pgo-gather] missing collect test binary: $candidate" >&2
@@ -1212,19 +1309,42 @@ run_collect_tests_default() {
       echo "[pgo-gather] warning: $label failed --list-tests preflight; continuing" >&2
     fi
 
+    if is_pgo_verbose_enabled; then
+      local selected_count="unknown"
+      local selected_list=""
+      if [[ -n "$filter" ]]; then
+        selected_list="$("$candidate" --list-tests "$filter" 2>/dev/null || true)"
+      else
+        selected_list="$("$candidate" --list-tests 2>/dev/null || true)"
+      fi
+      if [[ -n "$selected_list" ]]; then
+        local parsed_count
+        parsed_count="$(printf '%s\n' "$selected_list" | awk '/test cases/{print $1; exit}')"
+        if [[ -n "$parsed_count" && "$parsed_count" =~ ^[0-9]+$ ]]; then
+          selected_count="$parsed_count"
+        fi
+      fi
+      pgo_verbose_log "$progress_tag $label selected-tests=$selected_count filter='${filter:-all-tests}'"
+    fi
+
     collected_binaries+=("$candidate")
 
-    if run_collect_case "$candidate" "$label" "$filter" "$reports_dir" "$logs_dir" "$coverage_raw_dir"; then
+    if run_collect_case "$candidate" "$label" "$filter" "$reports_dir" "$logs_dir" "$coverage_raw_dir" "$progress_tag"; then
       passed_count=$((passed_count + 1))
     else
       failed_count=$((failed_count + 1))
     fi
+
+    echo "[pgo-gather] suite progress: $suite_index/$suite_total done (passed=$passed_count failed=$failed_count)" >&2
   done
 
   if [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "microsoft" ]] && is_windows_host; then
     local nonempty_count
     nonempty_count="$(count_nonempty_cobertura_files "$coverage_raw_dir")"
     if [[ "$nonempty_count" == "0" ]] && _has_opencppcoverage; then
+      if [[ "${KANO_CPP_INFRA_COVERAGE_DISABLE_FALLBACK:-1}" == "1" ]]; then
+        echo "[pgo-gather] fallback disabled: skipping OpenCppCoverage retry after empty Microsoft Cobertura" >&2
+      else
       local previous_coverage_tool="${KANO_CPP_INFRA_COVERAGE_TOOL:-}"
       echo "[pgo-gather] Microsoft coverage produced only empty Cobertura reports; retrying kano_git_tui_tests with OpenCppCoverage" >&2
       export KANO_CPP_INFRA_COVERAGE_TOOL="opencppcoverage"
@@ -1234,7 +1354,8 @@ run_collect_tests_default() {
         "[unit],[property]" \
         "$reports_dir" \
         "$logs_dir" \
-        "$coverage_raw_dir"; then
+        "$coverage_raw_dir" \
+        "[fallback]"; then
         echo "[pgo-gather] OpenCppCoverage fallback for kano_git_tui_tests completed" >&2
       else
         echo "[pgo-gather] warning: OpenCppCoverage fallback for kano_git_tui_tests failed" >&2
@@ -1269,6 +1390,7 @@ run_collect_tests_default() {
       fi
 
       export KANO_CPP_INFRA_COVERAGE_TOOL="$previous_coverage_tool"
+      fi
     fi
   fi
 
@@ -1287,10 +1409,14 @@ run_collect_tests_default() {
   dump_cobertura_debug_summary "$coverage_raw_dir"
 
   render_junit_html_reports "$reports_dir" "$html_dir"
-  if [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "llvm" ]]; then
-    generate_llvm_coverage_html "$coverage_raw_dir" "$coverage_html_dir" "${collected_binaries[@]}"
+  if [[ -n "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" ]]; then
+    if [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "llvm" ]]; then
+      generate_llvm_coverage_html "$coverage_raw_dir" "$coverage_html_dir" "${collected_binaries[@]}"
+    else
+      generate_coverage_html "$coverage_raw_dir" "$coverage_html_dir"
+    fi
   else
-    generate_coverage_html "$coverage_raw_dir" "$coverage_html_dir"
+    echo "[pgo-gather] coverage HTML skipped (coverage disabled for this run)" >&2
   fi
 
   render_reports_homepage "$reports_root" "$html_dir" "$coverage_html_dir" "$reports_dir" "$logs_dir"
