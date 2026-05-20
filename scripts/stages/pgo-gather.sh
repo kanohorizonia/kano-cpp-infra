@@ -62,6 +62,64 @@ resolve_test_skill_root() {
   return 1
 }
 
+is_pgo_debug_enabled() {
+  case "${KANO_CPP_INFRA_PGO_DEBUG:-0}" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+pgo_debug_log() {
+  is_pgo_debug_enabled || return 0
+  echo "[pgo-gather][debug] $*" >&2
+}
+
+dump_cobertura_debug_summary() {
+  local raw_dir="$1"
+  local out_file="${2:-}"
+
+  is_pgo_debug_enabled || return 0
+  [[ -d "$raw_dir" ]] || return 0
+
+  if [[ -z "$out_file" ]]; then
+    if [[ -n "${KANO_CPP_INFRA_PGO_DEBUG_DIR:-}" ]]; then
+      mkdir -p "$KANO_CPP_INFRA_PGO_DEBUG_DIR"
+      out_file="$KANO_CPP_INFRA_PGO_DEBUG_DIR/cobertura-summary.txt"
+    else
+      out_file="$raw_dir/cobertura-summary.txt"
+    fi
+  fi
+
+  python - "$raw_dir" "$out_file" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+raw_dir = Path(sys.argv[1])
+out_file = Path(sys.argv[2])
+
+lines = []
+lines.append(f"raw_dir={raw_dir}")
+for xml_path in sorted(raw_dir.glob("*.cobertura.xml")):
+    try:
+        root = ET.parse(xml_path).getroot()
+        lines_valid = int(root.attrib.get("lines-valid", "0") or "0")
+        lines_covered = int(root.attrib.get("lines-covered", "0") or "0")
+        line_rate = root.attrib.get("line-rate", "0")
+        package_count = len(root.findall("./packages/package"))
+        lines.append(
+            f"{xml_path.name}\tlines-valid={lines_valid}\tlines-covered={lines_covered}\tline-rate={line_rate}\tpackages={package_count}"
+        )
+    except Exception as exc:
+        lines.append(f"{xml_path.name}\tparse-error={exc}")
+
+out_file.parent.mkdir(parents=True, exist_ok=True)
+out_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+
+  pgo_debug_log "cobertura summary written: $out_file"
+}
+
 count_nonempty_cobertura_files() {
   local raw_dir="$1"
   python - "$raw_dir" <<'PY'
@@ -118,6 +176,7 @@ PY
     if [[ "$mode" == "filtered" ]]; then
       MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
         --sources "$src_win" \
+        --cover_children \
         --export_type "cobertura:$cov_win" \
         --quiet \
         -- "$bin_win" \
@@ -127,6 +186,7 @@ PY
     else
       MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
         --sources "$src_win" \
+        --cover_children \
         --export_type "cobertura:$cov_win" \
         --quiet \
         -- "$bin_win" \
@@ -228,9 +288,18 @@ ensure_windows_pgo_runtime_path() {
 
 # Check if Microsoft.CodeCoverage.Console (dotnet global tool) is available
 _has_microsoft_codecoverage() {
+  local _home="${HOME:-}"
+  local _userprofile_posix=""
+  if [[ -n "${USERPROFILE:-}" ]]; then
+    _userprofile_posix="${USERPROFILE//\\//}"
+  fi
+
   command -v codecoverage >/dev/null 2>&1 || \
   command -v CodeCoverage >/dev/null 2>&1 || \
   command -v CodeCoverage.exe >/dev/null 2>&1 || \
+  [[ -x "$_home/.dotnet/tools/codecoverage" ]] || \
+  [[ -x "$_home/.dotnet/tools/codecoverage.exe" ]] || \
+  [[ -n "$_userprofile_posix" && -x "$_userprofile_posix/.dotnet/tools/codecoverage.exe" ]] || \
   [[ -x "/c/Program Files/Microsoft Visual Studio/2022/Enterprise/Team Tools/Dynamic Code Coverage Tools/CodeCoverage.exe" ]] || \
   [[ -x "/c/Program Files/Microsoft Visual Studio/2022/Professional/Team Tools/Dynamic Code Coverage Tools/CodeCoverage.exe" ]] || \
   [[ -x "/c/Program Files/Microsoft Visual Studio/2022/Community/Team Tools/Dynamic Code Coverage Tools/CodeCoverage.exe" ]] || \
@@ -239,9 +308,21 @@ _has_microsoft_codecoverage() {
 
 # Resolve the Microsoft.CodeCoverage.Console executable path
 _resolve_microsoft_codecoverage() {
+  local _home="${HOME:-}"
+  local _userprofile_posix=""
+
   command -v codecoverage 2>/dev/null && return
   command -v CodeCoverage 2>/dev/null && return
   command -v CodeCoverage.exe 2>/dev/null && return
+
+  [[ -x "$_home/.dotnet/tools/codecoverage" ]] && printf '%s\n' "$_home/.dotnet/tools/codecoverage" && return
+  [[ -x "$_home/.dotnet/tools/codecoverage.exe" ]] && printf '%s\n' "$_home/.dotnet/tools/codecoverage.exe" && return
+
+  if [[ -n "${USERPROFILE:-}" ]]; then
+    _userprofile_posix="${USERPROFILE//\\//}"
+    [[ -x "$_userprofile_posix/.dotnet/tools/codecoverage.exe" ]] && printf '%s\n' "$_userprofile_posix/.dotnet/tools/codecoverage.exe" && return
+  fi
+
   for _vs_ed in Enterprise Professional Community BuildTools; do
     local _exe="/c/Program Files/Microsoft Visual Studio/2022/${_vs_ed}/Team Tools/Dynamic Code Coverage Tools/CodeCoverage.exe"
     [[ -x "$_exe" ]] && printf '%s\n' "$_exe" && return
@@ -319,6 +400,8 @@ _run_with_coverage() {
     local wrapped_command
     wrapped_command="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$ps_script\""
     mkdir -p "$(dirname "$cobertura_out")"
+    pgo_debug_log "provider=microsoft tool=$codecov_bin output=$cobertura_out"
+    pgo_debug_log "provider=microsoft command=$wrapped_command"
     "$codecov_bin" collect \
       --output-format cobertura \
       --output "$(cygpath -w "$cobertura_out" 2>/dev/null || printf '%s' "$cobertura_out")" \
@@ -334,6 +417,8 @@ _run_with_coverage() {
     local binary_win="$(_to_win_path "$binary")"
 
     mkdir -p "$(dirname "$coverage_out")"
+    pgo_debug_log "provider=opencppcoverage tool=$occ_bin output=$coverage_out"
+    pgo_debug_log "provider=opencppcoverage binary=$binary_win args=$*"
     MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
       --sources "$src_win" \
       --cover_children \
@@ -470,6 +555,7 @@ PY
   done
 
   if [[ ${#nonempty_xml_files[@]} -eq 0 ]]; then
+    dump_cobertura_debug_summary "$raw_dir"
     if [[ "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
       echo "[pgo-gather] quick mode: all Cobertura XML reports are empty; publishing placeholder coverage HTML for flow validation" >&2
       mkdir -p "$html_dir"
@@ -630,6 +716,11 @@ run_collect_case() {
     fi
     echo "[pgo-gather] warning: $in_label finished without junit output; treating as failure" >&2
   fi
+  if [[ -f "$report_tmp" ]]; then
+    mv -f "$report_tmp" "$report_path"
+    echo "[pgo-gather] warning: $in_label exited non-zero but produced junit; preserving report" >&2
+    return 0
+  fi
 
   echo "[pgo-gather] warning: $in_label failed for filter '${in_filter:-all-tests}', retry full binary" >&2
   rm -f "$report_tmp"
@@ -640,6 +731,47 @@ run_collect_case() {
       return 0
     fi
     echo "[pgo-gather] warning: $in_label fallback finished without junit output; treating as failure" >&2
+  fi
+  if [[ -f "$report_tmp" ]]; then
+    mv -f "$report_tmp" "$report_path"
+    echo "[pgo-gather] warning: $in_label fallback exited non-zero but produced junit; preserving report" >&2
+    return 0
+  fi
+
+  # If coverage wrapper crashes (common with some Windows binaries), preserve real
+  # test counts by retrying without coverage instrumentation.
+  if [[ -n "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" ]]; then
+    echo "[pgo-gather] warning: $in_label coverage execution failed; retrying without coverage" >&2
+    rm -f "$report_tmp"
+
+    if [[ -n "$in_filter" ]]; then
+      if "$in_candidate" --order lex --rng-seed 1337 --durations yes "$in_filter" "${reporter_args_tmp[@]}" >>"$log_path" 2>&1; then
+        if [[ -f "$report_tmp" ]]; then
+          mv -f "$report_tmp" "$report_path"
+          echo "[pgo-gather] pass $in_label (no-coverage filtered retry)" >&2
+          return 0
+        fi
+      fi
+      if [[ -f "$report_tmp" ]]; then
+        mv -f "$report_tmp" "$report_path"
+        echo "[pgo-gather] warning: $in_label no-coverage filtered retry exited non-zero but produced junit; preserving report" >&2
+        return 0
+      fi
+    fi
+
+    rm -f "$report_tmp"
+    if "$in_candidate" --order lex --rng-seed 1337 "${reporter_args_tmp[@]}" >>"$log_path" 2>&1; then
+      if [[ -f "$report_tmp" ]]; then
+        mv -f "$report_tmp" "$report_path"
+        echo "[pgo-gather] pass $in_label (no-coverage fallback all-tests)" >&2
+        return 0
+      fi
+    fi
+    if [[ -f "$report_tmp" ]]; then
+      mv -f "$report_tmp" "$report_path"
+      echo "[pgo-gather] warning: $in_label no-coverage fallback exited non-zero but produced junit; preserving report" >&2
+      return 0
+    fi
   fi
 
   rm -f "$report_tmp"
@@ -774,21 +906,89 @@ for junit_path in sorted(in_dir.glob("*.xml")):
 
     for suite in suites:
         suite_name = suite.attrib.get("name", junit_path.stem)
-        failures = int(suite.attrib.get("failures", "0") or "0")
-        errors = int(suite.attrib.get("errors", "0") or "0")
-        skipped = int(suite.attrib.get("skipped", "0") or "0")
+        suite_total = int(suite.attrib.get("tests", "0") or "0")
+        suite_failures = int(suite.attrib.get("failures", "0") or "0")
+        suite_errors = int(suite.attrib.get("errors", "0") or "0")
+        suite_skipped = int(suite.attrib.get("skipped", "0") or "0")
+        testcases = list(suite.findall("testcase"))
 
-        test_el = ET.SubElement(testing, "Test", {"Status": "failed" if failures or errors else ("notrun" if skipped else "passed")})
-        ET.SubElement(test_el, "Name").text = suite_name
-        ET.SubElement(test_el, "FullName").text = suite_name
-        ET.SubElement(test_el, "CompletionStatus").text = "failed" if failures or errors else ("notrun" if skipped else "passed")
-        ET.SubElement(test_el, "ExecutionTime").text = suite.attrib.get("time", "0")
+        if not testcases:
+            # Fallback: keep one synthetic entry if no testcase nodes exist.
+            status = "failed" if suite_failures or suite_errors else ("notrun" if suite_skipped else "passed")
 
-        results = ET.SubElement(test_el, "Results")
-        nm_w = ET.SubElement(results, "NamedMeasurement", {"name": "Warnings"})
-        ET.SubElement(nm_w, "Value").text = "0"
-        nm_e = ET.SubElement(results, "NamedMeasurement", {"name": "Errors"})
-        ET.SubElement(nm_e, "Value").text = str(errors + failures)
+            test_el = ET.SubElement(testing, "Test", {"Status": status})
+            ET.SubElement(test_el, "Name").text = suite_name
+            ET.SubElement(test_el, "FullName").text = suite_name
+            ET.SubElement(test_el, "CompletionStatus").text = status
+            ET.SubElement(test_el, "ExecutionTime").text = suite.attrib.get("time", "0")
+
+            results = ET.SubElement(test_el, "Results")
+            nm_w = ET.SubElement(results, "NamedMeasurement", {"name": "Warnings"})
+            ET.SubElement(nm_w, "Value").text = "0"
+            nm_e = ET.SubElement(results, "NamedMeasurement", {"name": "Errors"})
+            ET.SubElement(nm_e, "Value").text = str(suite_errors + suite_failures)
+            continue
+
+        emitted = 0
+        emitted_failed = 0
+        emitted_skipped = 0
+        for tc in testcases:
+            tc_name = tc.attrib.get("name", "unnamed")
+            tc_time = tc.attrib.get("time", "0")
+            full_name = f"{suite_name}::{tc_name}"
+
+            has_failure = tc.find("failure") is not None
+            has_error = tc.find("error") is not None
+            has_skipped = tc.find("skipped") is not None
+            status = "failed" if has_failure or has_error else ("notrun" if has_skipped else "passed")
+
+            test_el = ET.SubElement(testing, "Test", {"Status": status})
+            ET.SubElement(test_el, "Name").text = tc_name
+            ET.SubElement(test_el, "FullName").text = full_name
+            ET.SubElement(test_el, "CompletionStatus").text = status
+            ET.SubElement(test_el, "ExecutionTime").text = tc_time
+
+            results = ET.SubElement(test_el, "Results")
+            nm_w = ET.SubElement(results, "NamedMeasurement", {"name": "Warnings"})
+            ET.SubElement(nm_w, "Value").text = "0"
+            nm_e = ET.SubElement(results, "NamedMeasurement", {"name": "Errors"})
+            ET.SubElement(nm_e, "Value").text = "1" if (has_failure or has_error) else "0"
+
+            emitted += 1
+            if has_failure or has_error:
+                emitted_failed += 1
+            if has_skipped:
+                emitted_skipped += 1
+
+        # Catch2 JUnit often reports full totals in suite attributes while only
+        # emitting testcase nodes for a subset. Fill the gap so renderer totals
+        # reflect the actual suite test count.
+        missing = max(0, suite_total - emitted)
+        remaining_failed = max(0, (suite_failures + suite_errors) - emitted_failed)
+        remaining_skipped = max(0, suite_skipped - emitted_skipped)
+        for idx in range(missing):
+            if idx < remaining_failed:
+                status = "failed"
+                err_value = "1"
+            elif idx < remaining_failed + remaining_skipped:
+                status = "notrun"
+                err_value = "0"
+            else:
+                status = "passed"
+                err_value = "0"
+
+            tc_name = f"{suite_name}::synthetic-{idx + 1}"
+            test_el = ET.SubElement(testing, "Test", {"Status": status})
+            ET.SubElement(test_el, "Name").text = tc_name
+            ET.SubElement(test_el, "FullName").text = tc_name
+            ET.SubElement(test_el, "CompletionStatus").text = status
+            ET.SubElement(test_el, "ExecutionTime").text = "0"
+
+            results = ET.SubElement(test_el, "Results")
+            nm_w = ET.SubElement(results, "NamedMeasurement", {"name": "Warnings"})
+            ET.SubElement(nm_w, "Value").text = "0"
+            nm_e = ET.SubElement(results, "NamedMeasurement", {"name": "Errors"})
+            ET.SubElement(nm_e, "Value").text = err_value
 
 out_xml.parent.mkdir(parents=True, exist_ok=True)
 ET.ElementTree(site).write(out_xml, encoding="utf-8", xml_declaration=True)
@@ -917,12 +1117,20 @@ run_collect_tests_default() {
   html_dir="$reports_root/html"
   local coverage_raw_dir="$reports_root/coverage/raw"
   local coverage_html_dir="$reports_root/coverage/html"
+  local debug_dir="$reports_root/debug"
 
   if ! rm -rf "$reports_root" 2>/dev/null; then
     echo "[pgo-gather] warning: failed to remove $reports_root (likely file lock); cleaning files in-place" >&2
     find "$reports_root" -type f -delete 2>/dev/null || true
   fi
   mkdir -p "$reports_dir" "$logs_dir" "$html_dir" "$coverage_raw_dir"
+  if is_pgo_debug_enabled; then
+    mkdir -p "$debug_dir"
+    export KANO_CPP_INFRA_PGO_DEBUG_DIR="$debug_dir"
+    pgo_debug_log "debug enabled; artifacts dir: $debug_dir"
+  else
+    unset KANO_CPP_INFRA_PGO_DEBUG_DIR || true
+  fi
 
   if is_windows_host; then
     exe_ext=".exe"
@@ -949,6 +1157,19 @@ run_collect_tests_default() {
 
   if [[ -n "$coverage_tool" ]]; then
     echo "[pgo-gather] coverage collection: $coverage_tool (output: $coverage_raw_dir)" >&2
+    if is_pgo_debug_enabled; then
+      if [[ "$coverage_tool" == "opencppcoverage" ]]; then
+        {
+          echo "tool=$(_resolve_opencppcoverage || true)"
+          "$(_resolve_opencppcoverage || printf 'OpenCppCoverage')" --version 2>&1 || true
+        } > "$debug_dir/tool-version-opencppcoverage.log" 2>&1
+      elif [[ "$coverage_tool" == "microsoft" ]]; then
+        {
+          echo "tool=$(_resolve_microsoft_codecoverage || true)"
+          "$(_resolve_microsoft_codecoverage || printf 'codecoverage')" --version 2>&1 || true
+        } > "$debug_dir/tool-version-microsoft.log" 2>&1
+      fi
+    fi
   else
     echo "[pgo-gather] coverage collection: disabled (no supported tool found)" >&2
   fi
@@ -1000,6 +1221,57 @@ run_collect_tests_default() {
     fi
   done
 
+  if [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "microsoft" ]] && is_windows_host; then
+    local nonempty_count
+    nonempty_count="$(count_nonempty_cobertura_files "$coverage_raw_dir")"
+    if [[ "$nonempty_count" == "0" ]] && _has_opencppcoverage; then
+      local previous_coverage_tool="${KANO_CPP_INFRA_COVERAGE_TOOL:-}"
+      echo "[pgo-gather] Microsoft coverage produced only empty Cobertura reports; retrying kano_git_tui_tests with OpenCppCoverage" >&2
+      export KANO_CPP_INFRA_COVERAGE_TOOL="opencppcoverage"
+      if run_collect_case \
+        "$bin_root/kano_git_tui_tests$exe_ext" \
+        "kano_git_tui_tests" \
+        "[unit],[property]" \
+        "$reports_dir" \
+        "$logs_dir" \
+        "$coverage_raw_dir"; then
+        echo "[pgo-gather] OpenCppCoverage fallback for kano_git_tui_tests completed" >&2
+      else
+        echo "[pgo-gather] warning: OpenCppCoverage fallback for kano_git_tui_tests failed" >&2
+      fi
+
+      nonempty_count="$(count_nonempty_cobertura_files "$coverage_raw_dir")"
+      if [[ "$nonempty_count" == "0" ]]; then
+        local occ_bin
+        occ_bin="$(_resolve_opencppcoverage)"
+
+        echo "[pgo-gather] OpenCppCoverage wrapper path still empty; running direct OpenCppCoverage fallback command" >&2
+        (
+          cd "$CPP_ROOT"
+          local exe_rel="out/bin/$preset_name/debug/kano_git_tui_tests$exe_ext"
+          local cov_rel=".kano/tmp/pgo/gather-reports/coverage/raw/kano_git_tui_tests_opencpp_fallback.cobertura.xml"
+          local junit_rel=".kano/tmp/pgo/gather-reports/junit/kano_git_tui_tests_opencpp_fallback.xml"
+          local src_win exe_win cov_win junit_win
+          src_win="$(cygpath -w "code")"
+          exe_win="$(cygpath -w "$exe_rel")"
+          cov_win="$(cygpath -w "$cov_rel")"
+          junit_win="$(cygpath -w "$junit_rel")"
+
+          MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
+            --sources "$src_win" \
+            --cover_children \
+            --export_type "cobertura:$cov_win" \
+            --quiet \
+            -- "$exe_win" \
+              --order lex --rng-seed 1337 --durations yes "[unit],[property]" \
+              --reporter junit "--out=$junit_win"
+        ) >"$logs_dir/kano_git_tui_tests_opencpp_fallback.log" 2>&1 || true
+      fi
+
+      export KANO_CPP_INFRA_COVERAGE_TOOL="$previous_coverage_tool"
+    fi
+  fi
+
   if [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "opencppcoverage" ]] && is_windows_host; then
     local nonempty_count
     nonempty_count="$(count_nonempty_cobertura_files "$coverage_raw_dir")"
@@ -1011,6 +1283,8 @@ run_collect_tests_default() {
         "$logs_dir" || true
     fi
   fi
+
+  dump_cobertura_debug_summary "$coverage_raw_dir"
 
   render_junit_html_reports "$reports_dir" "$html_dir"
   if [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "llvm" ]]; then
