@@ -66,7 +66,44 @@ kano_windows_powershell_bin() {
 kano_windows_run_ps_helper() {
   local powershell_bin=""
   powershell_bin="$(kano_windows_powershell_bin)" || return 127
-  "$powershell_bin" -NoProfile -ExecutionPolicy Bypass -File "$KANO_WINDOWS_PS_HELPER" "$@"
+
+  # Preferred path: invoke helper as a script file.
+  if "$powershell_bin" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$KANO_WINDOWS_PS_HELPER" "$@" 2>/dev/null; then
+    return 0
+  fi
+
+  # Fallback for environments enforcing AllSigned policy: load helper content
+  # as text and execute it as a scriptblock in-process (no -File execution).
+  local helper_path_for_ps="$KANO_WINDOWS_PS_HELPER"
+  if command -v cygpath >/dev/null 2>&1; then
+    helper_path_for_ps="$(cygpath -w "$KANO_WINDOWS_PS_HELPER" 2>/dev/null || printf '%s' "$KANO_WINDOWS_PS_HELPER")"
+  fi
+  local helper_escaped="${helper_path_for_ps//\'/\'\'}"
+  local arg arg_escaped
+  local forwarded_args=""
+  local pending_path_flag=""
+  for arg in "$@"; do
+    if [[ "$arg" == -* ]]; then
+      forwarded_args+=" $arg"
+      case "$arg" in
+        -Path|-Root|-BuildDir|-CoverageBuildDir|-Vcvars)
+          pending_path_flag="$arg"
+          ;;
+        *)
+          pending_path_flag=""
+          ;;
+      esac
+    else
+      if [[ -n "$pending_path_flag" ]] && command -v cygpath >/dev/null 2>&1; then
+        arg="$(cygpath -w "$arg" 2>/dev/null || printf '%s' "$arg")"
+      fi
+      arg_escaped="${arg//\'/\'\'}"
+      forwarded_args+=" '$arg_escaped'"
+      pending_path_flag=""
+    fi
+  done
+
+  "$powershell_bin" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "\$script = Get-Content -Raw -LiteralPath '$helper_escaped'; \$sb = [ScriptBlock]::Create(\$script); & \$sb$forwarded_args"
 }
 
 kano_windows_file_exists() {
@@ -90,6 +127,21 @@ kano_windows_detect_vcvarsall() {
     printf '%s\n' "$found"
     return 0
   fi
+
+  # Fallback: directly scan common Visual Studio install roots.
+  local candidate
+  shopt -s nullglob
+  for candidate in \
+    /c/Program\ Files/Microsoft\ Visual\ Studio/*/*/VC/Auxiliary/Build/vcvarsall.bat \
+    /c/Program\ Files\ \(x86\)/Microsoft\ Visual\ Studio/*/*/VC/Auxiliary/Build/vcvarsall.bat; do
+    if kano_windows_file_exists "$candidate"; then
+      printf '%s\n' "$candidate"
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+
   return 1
 }
 
