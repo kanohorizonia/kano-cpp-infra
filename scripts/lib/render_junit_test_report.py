@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Legacy compatibility renderer.
+# Canonical final test/coverage dashboard rendering is provided by kano-cpp-test-skill.
+
 import html
 import json
 import sys

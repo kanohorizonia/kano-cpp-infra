@@ -963,8 +963,10 @@ render_junit_html_reports() {
     return
   fi
 
-  local tmp_result_dir="$html_root/.tmp-test-result"
-  mkdir -p "$tmp_result_dir" "$html_root"
+  local reports_root
+  reports_root="$(cd -- "$html_root/.." && pwd)"
+  local tmp_result_dir="$reports_root/raw/.tmp-test-result"
+  mkdir -p "$tmp_result_dir" "$html_root" "$reports_root/raw"
 
   python - "$in_reports_dir" "$tmp_result_dir/ctest-report.xml" <<'PY'
 from __future__ import annotations
@@ -1081,10 +1083,25 @@ out_xml.parent.mkdir(parents=True, exist_ok=True)
 ET.ElementTree(site).write(out_xml, encoding="utf-8", xml_declaration=True)
 PY
 
-  if ! python "$skill_root/src/shell/reports/common/render-test-report.py" \
-    "$tmp_result_dir/ctest-report.xml" \
+  local coverage_xml=""
+  coverage_xml="$(find "$reports_root/coverage/raw" -maxdepth 2 -type f \( -name '*.cobertura.xml' -o -name 'cobertura.xml' -o -name 'coverage.xml' \) 2>/dev/null | head -n 1 || true)"
+
+  if ! KANO_TEST_XML="$tmp_result_dir/ctest-report.xml" \
+    KANO_COVERAGE_XML="$coverage_xml" \
+    python "$skill_root/src/shell/reports/common/kano-cpp-report-adapter" \
+      --report-root "$reports_root" \
+      --slug "pgo-gather" \
+      --title "PGO Gather Feature Report" \
+      --output "$reports_root/raw/kano-report-site-v1.json"; then
+    echo "[pgo-gather] warning: skill adapter failed; using fallback html renderer" >&2
+    _render_junit_html_reports_fallback "$in_reports_dir" "$html_root"
+    return
+  fi
+
+  if ! python "$skill_root/src/shell/reports/common/kano-report-site-renderer" \
+    "$reports_root/raw/kano-report-site-v1.json" \
     "$html_root"; then
-    echo "[pgo-gather] warning: skill test renderer failed; using fallback html renderer" >&2
+    echo "[pgo-gather] warning: skill site renderer failed; using fallback html renderer" >&2
     _render_junit_html_reports_fallback "$in_reports_dir" "$html_root"
   fi
 }
