@@ -73,9 +73,9 @@ profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
-quick-test = "bash ../../code/tests/run_tests.sh windows-ninja-msvc-release"
-test = "bash ../../code/tests/run_tests.sh windows-ninja-msvc-release"
-full-test = "bash ../../code/tests/run_tests.sh windows-ninja-msvc-release --with-e2e"
+quick-test = "bash scripts/stages/test-lane.sh quick windows-ninja-msvc-release"
+test = "bash scripts/stages/test-lane.sh default windows-ninja-msvc-release"
+full-test = "bash scripts/stages/test-lane.sh full windows-ninja-msvc-release"
 
 [target.linux-64.tasks]
 # Bootstrap
@@ -108,9 +108,9 @@ profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
-quick-test = "bash ../../../code/tests/run_tests.sh linux-ninja-gcc-release"
-test = "bash ../../../code/tests/run_tests.sh linux-ninja-gcc-release"
-full-test = "bash ../../../code/tests/run_tests.sh linux-ninja-gcc-release --with-e2e"
+quick-test = "bash scripts/stages/test-lane.sh quick linux-ninja-gcc-release"
+test = "bash scripts/stages/test-lane.sh default linux-ninja-gcc-release"
+full-test = "bash scripts/stages/test-lane.sh full linux-ninja-gcc-release"
 
 [target.osx-64.tasks]
 # Development build (Debug preset - fast iteration)
@@ -143,9 +143,9 @@ profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
-quick-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-x64-release"
-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-x64-release"
-full-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-x64-release --with-e2e"
+quick-test = "bash scripts/stages/test-lane.sh quick macos-ninja-clang-x64-release"
+test = "bash scripts/stages/test-lane.sh default macos-ninja-clang-x64-release"
+full-test = "bash scripts/stages/test-lane.sh full macos-ninja-clang-x64-release"
 
 [target.osx-arm64.tasks]
 # Development build (Debug preset - fast iteration)
@@ -178,6 +178,6 @@ profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
-quick-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-arm64-release"
-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-arm64-release"
-full-test = "bash ../../../code/tests/run_tests.sh macos-ninja-clang-arm64-release --with-e2e"
+quick-test = "bash scripts/stages/test-lane.sh quick macos-ninja-clang-arm64-release"
+test = "bash scripts/stages/test-lane.sh default macos-ninja-clang-arm64-release"
+full-test = "bash scripts/stages/test-lane.sh full macos-ninja-clang-arm64-release"

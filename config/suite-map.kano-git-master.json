@@ -1,0 +1,16 @@
+{
+  "rules": [
+    { "suite": "repo-discovery", "match": { "any": ["workspace discover", "repo discovery", "submodule", "subrepo", "external-root"] } },
+    { "suite": "status-log", "match": { "any": ["repo status", "status", "log", "diff", "remote preview", "behind remote"] } },
+    { "suite": "fetch-sync", "match": { "any": ["fetch", "sync", "origin-latest", "recursive workspace fetch"] } },
+    { "suite": "commit-plan", "match": { "any": ["plan runbook", "plan verify", "commit plan", "plan-stage", "empty plan"] } },
+    { "suite": "commit-push", "match": { "any": ["commit-push", "native-commit", "push summary", "dirty detection", "staging", "secret gate"] } },
+    { "suite": "export-package", "match": { "any": ["export", "archive", "manifest", "release archive smoke", "subrepo expansion"] } },
+    { "suite": "tui", "match": { "any": ["kano_git_tui_tests", "tui", "command mode", "metadata cache", "shell-executor"] } },
+    { "suite": "coverage-pgo", "match": { "any": ["coverage", "cobertura", "pgo", "opencppcoverage", "microsoft-code-coverage"] } },
+    { "suite": "infra", "match": { "any": ["pixi", "launcher", "wrapper", "path", "platform", "bootstrap", "report"] } },
+    { "suite": "generated-property", "match": { "any": ["synthetic", "generated", "property", "[Property]"] } },
+    { "suite": "external-optional", "match": { "any": ["github api", "copilot", "network", "external", "integration"] } },
+    { "suite": "cli-core", "match": { "any": ["kano_git_cli_tests", "unknown command", "help", "argument", "entrypoint"] } }
+  ]
+}

@@ -54,5 +54,17 @@ report_skill_package() {
   : "${KANO_REPORT_SLUG:=package-all}"
   export KANO_REPORT_SLUG
 
+  : "${KANO_TEST_LANE:=gather}"
+  export KANO_TEST_LANE
+  : "${KANO_REPORT_COMMAND:=pixi run gather-reports}"
+  export KANO_REPORT_COMMAND
+
+  local suite_map_src="$KANO_CPP_INFRA_CPP_ROOT/shared/infra/config/suite-map.kano-git-master.json"
+  if [[ -f "$suite_map_src" && -n "${KANO_REPORT_ROOT:-}" ]]; then
+    mkdir -p "$KANO_REPORT_ROOT/raw"
+    cp -f "$suite_map_src" "$KANO_REPORT_ROOT/raw/suite-map.kano-git-master.json"
+    export KANO_TEST_SUITE_MAP_REL="raw/suite-map.kano-git-master.json"
+  fi
+
   bash "$KANO_CPP_TEST_SKILL_ROOT/src/shell/reports/common/package-reports.sh" "$@"
 }

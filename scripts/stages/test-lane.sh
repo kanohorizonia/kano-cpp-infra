@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+INFRA_SCRIPTS_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+INFRA_BASE_DIR="$(cd -- "$INFRA_SCRIPTS_DIR/.." && pwd)"
+CPP_ROOT="$(cd -- "$INFRA_BASE_DIR/../.." && pwd)"
+REPO_ROOT="$(cd -- "$CPP_ROOT/../.." && pwd)"
+
+LANE="${1:-default}"
+PRESET="${2:-windows-ninja-msvc-release}"
+
+case "$LANE" in
+  quick)
+    REPORT_ROOT="$CPP_ROOT/.kano/tmp/pgo/quick-test-reports"
+    REPORT_SLUG="quick"
+    TEST_CMD="pixi run quick-test"
+    ;;
+  default|test)
+    REPORT_ROOT="$CPP_ROOT/.kano/tmp/pgo/test-reports"
+    REPORT_SLUG="test"
+    TEST_CMD="pixi run test"
+    LANE="default"
+    ;;
+  full)
+    REPORT_ROOT="$CPP_ROOT/.kano/tmp/pgo/full-test-reports"
+    REPORT_SLUG="full"
+    TEST_CMD="pixi run full-test"
+    ;;
+  *)
+    echo "Unknown lane: $LANE" >&2
+    exit 2
+    ;;
+esac
+
+export KANO_CPP_INFRA_REPO_ROOT="$REPO_ROOT"
+export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
+export KANO_REPORT_ROOT="$REPORT_ROOT"
+export KANO_REPORT_SLUG="$REPORT_SLUG"
+export KANO_TEST_LANE="$LANE"
+export KANO_TEST_COMMAND="$TEST_CMD"
+export KANO_REPORT_COMMAND="pixi run gather-reports"
+export KANO_TEST_SUITE_MAP_REL="raw/suite-map.kano-git-master.json"
+export KANO_TEST_REPORTS_ROOT="$REPORT_ROOT/test-reports"
+export KANO_COVERAGE_REPORTS_ROOT="$REPORT_ROOT/coverage-reports"
+export KANO_TEST_XML="$REPORT_ROOT/test-reports/$REPORT_SLUG/tests.xml"
+
+mkdir -p "$REPORT_ROOT/raw"
+cp -f "$INFRA_BASE_DIR/config/suite-map.kano-git-master.json" "$REPORT_ROOT/raw/suite-map.kano-git-master.json"
+
+bash "$CPP_ROOT/code/tests/run_tests.sh" "$PRESET" "$LANE"
+bash "$INFRA_BASE_DIR/scripts/lib/package-reports-with-skill.sh"
