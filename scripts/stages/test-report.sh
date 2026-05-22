@@ -21,15 +21,23 @@ export KANO_CPP_INFRA_REPO_ROOT="${KANO_CPP_INFRA_REPO_ROOT:-${REPO_ROOT}}"
 # ─── Detect preset from build output layout ─────────────────────────────────────
 detect_preset_from_bin_dir() {
     local cpp_root="$1"
+    local fallback=""
     for bin_subdir in "$cpp_root/out/bin/"*; do
         [[ -d "$bin_subdir" ]] || continue
         local preset_name
         preset_name="$(basename "$bin_subdir")"
         if [[ -d "$bin_subdir/debug" || -d "$bin_subdir/release" || -d "$bin_subdir/relwithdebinfo" ]]; then
-            printf '%s\n' "$preset_name"
-            return 0
+            [[ -z "$fallback" ]] && fallback="$preset_name"
+            if [[ -f "$bin_subdir/debug/kano_git_cli_tests.exe" || -f "$bin_subdir/release/kano_git_cli_tests.exe" || -f "$bin_subdir/relwithdebinfo/kano_git_cli_tests.exe" || -f "$bin_subdir/minsizerel/kano_git_cli_tests.exe" || -f "$bin_subdir/debug/kano_git_cli_tests" || -f "$bin_subdir/release/kano_git_cli_tests" || -f "$bin_subdir/relwithdebinfo/kano_git_cli_tests" || -f "$bin_subdir/minsizerel/kano_git_cli_tests" ]]; then
+                printf '%s\n' "$preset_name"
+                return 0
+            fi
         fi
     done
+    if [[ -n "$fallback" ]]; then
+        printf '%s\n' "$fallback"
+        return 0
+    fi
     return 1
 }
 
