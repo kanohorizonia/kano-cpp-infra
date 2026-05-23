@@ -79,7 +79,7 @@ bool kano_platform_is_macos(void);
 
 /* ---------------------------------------------------------------------------
  * Path normalization
- * ---------------------------------------------------------------------------);
+ * --------------------------------------------------------------------------- */
 /**
  * Normalize a path: resolve . and .. components, collapse redundant separators.
  * Returns an allocated string; call free() to release.

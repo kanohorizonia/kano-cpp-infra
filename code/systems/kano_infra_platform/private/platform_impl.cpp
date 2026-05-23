@@ -82,7 +82,7 @@ char* kano_platform_join_path(const char* base, const char* append) {
     size_t len = strlen(base) + 1 + strlen(append) + 1;
     char* out = (char*)malloc(len);
     if (!out) return NULL;
-    sprintf(out, "%s/%s", base, append);
+    snprintf(out, len, "%s/%s", base, append);
     return out;
 }
 

@@ -16,7 +16,7 @@
 set -euo pipefail
 
 KANO_INFRA_MAC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export INF_CPP_ROOT="${INF_CPP_ROOT:-$(cd "$KANO_INFRA_MAC_SCRIPT_DIR/../.." && pwd)}"
+export INF_CPP_ROOT="${INF_CPP_ROOT:-${KANO_CPP_ROOT:-$(cd "$KANO_INFRA_MAC_SCRIPT_DIR/../../../../.." && pwd)}}"
 
 # Source infra's generic unix preset runner (provides kano_cpp_run_unix_preset)
 # shellcheck disable=SC1091

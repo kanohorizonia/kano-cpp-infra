@@ -3,8 +3,6 @@ set -euo pipefail
 
 KANO_INFRA_UNIX_PRESET_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-  export KANO_CPP_INFRA_BUILD_CONFIGURE_PRESET="$in_configure_preset"
-  export KANO_CPP_INFRA_BUILD_BUILD_PRESET="$in_build_preset"
 # Bootstrap pixi environment if not already active.
 # shellcheck source=/dev/null
 source "$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/pixi_bootstrap.sh"
@@ -45,6 +43,8 @@ kano_cpp_run_unix_preset() {
     return 1
   fi
 
+  export KANO_CPP_INFRA_BUILD_CONFIGURE_PRESET="$in_configure_preset"
+  export KANO_CPP_INFRA_BUILD_BUILD_PRESET="$in_build_preset"
   export KANO_CPP_INFRA_BUILD_PREFIX="$build_prefix"
 
   if [[ -n "${INF_CMAKE_CACHE_ARGS_JSON:-}" ]]; then
