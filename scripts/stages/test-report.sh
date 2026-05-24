@@ -88,5 +88,14 @@ export KANO_REPORT_SLUG="${KANO_REPORT_SLUG:-${DETECTED_PRESET}-${CONFIG_SUBDIR}
 
 # ─── Infer KANO_TEST_COMMAND ────────────────────────────────────────────────────
 export KANO_TEST_COMMAND="${KANO_TEST_COMMAND:-"$CLI_TEST && $TUI_TEST"}"
+export KANO_BDD_METADATA_DIR="${KANO_BDD_METADATA_DIR:-${KANO_REPORT_ROOT:-$REPO_ROOT/.kano/tmp/reports}/raw/bdd-metadata}"
+export KANO_TEST_BINARY_NAME="${KANO_TEST_BINARY_NAME:-kano_git_cli_tests}"
+
+if [[ -n "${KANO_TEST_XML:-}" && -f "${KANO_TEST_XML}" ]]; then
+    python "$INFRA_BASE_DIR/scripts/tools/generate-bdd-metadata-from-junit.py" \
+      "$KANO_TEST_XML" \
+      "$KANO_BDD_METADATA_DIR" \
+      "$KANO_TEST_BINARY_NAME"
+fi
 
 exec bash "$report_script" "$@"

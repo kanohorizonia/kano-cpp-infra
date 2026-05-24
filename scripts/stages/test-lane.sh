@@ -44,9 +44,15 @@ export KANO_TEST_SUITE_MAP_REL="raw/suite-map.kano-git-master.json"
 export KANO_TEST_REPORTS_ROOT="$REPORT_ROOT/test-reports"
 export KANO_COVERAGE_REPORTS_ROOT="$REPORT_ROOT/coverage-reports"
 export KANO_TEST_XML="$REPORT_ROOT/test-reports/$REPORT_SLUG/tests.xml"
+export KANO_BDD_METADATA_DIR="$REPORT_ROOT/raw/bdd-metadata"
+export KANO_TEST_BINARY_NAME="kano_git_cli_tests"
 
 mkdir -p "$REPORT_ROOT/raw"
 cp -f "$INFRA_BASE_DIR/config/suite-map.kano-git-master.json" "$REPORT_ROOT/raw/suite-map.kano-git-master.json"
 
 bash "$CPP_ROOT/code/tests/run_tests.sh" "$PRESET" "$LANE"
+python "$INFRA_BASE_DIR/scripts/tools/generate-bdd-metadata-from-junit.py" \
+  "$KANO_TEST_XML" \
+  "$KANO_BDD_METADATA_DIR" \
+  "$KANO_TEST_BINARY_NAME"
 bash "$INFRA_BASE_DIR/scripts/lib/package-reports-with-skill.sh"
