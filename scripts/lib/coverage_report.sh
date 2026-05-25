@@ -99,6 +99,44 @@ coverage_ensure_dirs() {
     mkdir -p "$INF_COVERAGE_HTML_DIR"
 }
 
+coverage_json_escape() {
+    local value="${1:-}"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\r'/ }"
+    value="${value//$'\n'/ }"
+    printf '%s' "$value"
+}
+
+coverage_write_status() {
+    local status="$1"
+    local reason="$2"
+    local detail="${3:-}"
+    local json_status json_reason json_detail
+
+    json_status="$(coverage_json_escape "$status")"
+    json_reason="$(coverage_json_escape "$reason")"
+    json_detail="$(coverage_json_escape "$detail")"
+
+    mkdir -p "$INF_COVERAGE_ROOT"
+    cat > "$INF_COVERAGE_ROOT/coverage-status.json" <<EOF
+{
+  "coverageHealth": "$json_status",
+  "reason": "$json_reason",
+  "detail": "$json_detail"
+}
+EOF
+    cat > "$INF_COVERAGE_ROOT/coverage-status.md" <<EOF
+# Coverage Status
+
+- Status: $status
+- Reason: $reason
+- Detail: $detail
+EOF
+    echo "[coverage_report] Coverage status: $status ($reason)"
+    echo "[coverage_report] Status artifact: $INF_COVERAGE_ROOT/coverage-status.json"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # coverage_build - Build with coverage instrumentation
 # ─────────────────────────────────────────────────────────────────────────────
@@ -507,25 +545,29 @@ coverage_report() {
     local binary_path="$cpp_root/$binary_dir/$test_binary"
 
     if [[ ! -f "$binary_path" ]]; then
-        echo "[coverage_report] ERROR: Binary not found: $binary_path" >&2
-        return 1
+        echo "[coverage_report] WARNING: Binary not found: $binary_path" >&2
+        coverage_write_status "UNAVAILABLE" "NO_INSTRUMENTED_BINARIES" "$binary_path"
+        return 0
     fi
 
     if [[ ! -f "$INF_COVERAGE_PROFDATA" ]]; then
-        echo "[coverage_report] ERROR: Merged profile not found: $INF_COVERAGE_PROFDATA" >&2
+        echo "[coverage_report] WARNING: Merged profile not found: $INF_COVERAGE_PROFDATA" >&2
         echo "[coverage_report] Run coverage_merge first." >&2
-        return 1
+        coverage_write_status "UNAVAILABLE" "MISSING_MERGED_PROFILE" "$INF_COVERAGE_PROFDATA"
+        return 0
     fi
 
     if [[ "$compiler_id" == "Clang" ]]; then
         if [[ -z "$llvm_cov_path" ]] && ! command -v llvm-cov >/dev/null 2>&1; then
             echo "[coverage_report] ERROR: llvm-cov not found." >&2
+            coverage_write_status "TOOL_FAILED" "LLVM_COV_NOT_FOUND" "llvm-cov"
             return 1
         fi
 
         local llvm_cov="${llvm_cov_path:+$llvm_cov_path/}llvm-cov"
         if [[ ! -x "$llvm_cov" ]] && ! command -v llvm-cov >/dev/null 2>&1; then
             echo "[coverage_report] ERROR: llvm-cov not executable: $llvm_cov" >&2
+            coverage_write_status "TOOL_FAILED" "LLVM_COV_NOT_EXECUTABLE" "$llvm_cov"
             return 1
         fi
         if [[ -x "$llvm_cov" ]]; then

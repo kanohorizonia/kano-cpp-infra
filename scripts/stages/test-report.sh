@@ -48,54 +48,32 @@ if [[ -z "$DETECTED_PRESET" ]]; then
     exit 1
 fi
 
-# ─── Locate config subdir (debug/release/relwithdebinfo) with test binaries ────
-resolve_config_dir() {
-    local preset_bin_dir="$1"
-    for config_dir in "$preset_bin_dir"/debug "$preset_bin_dir"/release \
-                     "$preset_bin_dir"/relwithdebinfo "$preset_bin_dir"/minsizerel; do
-        if [[ -f "$config_dir/kano_git_cli_tests.exe" || -f "$config_dir/kano_git_cli_tests" ]]; then
-            printf '%s\n' "$config_dir"
-            return 0
-        fi
-    done
-    return 1
-}
+# ─── Use the same lane-aware runner contract as `pixi run test` ────────────────
+REPORT_LANE="${KANO_TEST_LANE:-default}"
+case "$REPORT_LANE" in
+    default|test)
+        REPORT_LANE="default"
+        ;;
+    quick|full)
+        ;;
+    *)
+        echo "[ERROR] Unsupported test-report lane: $REPORT_LANE" >&2
+        exit 2
+        ;;
+esac
 
-PRESET_BIN_DIR="$CPP_ROOT/out/bin/${DETECTED_PRESET}"
-EXE_DIR="$(resolve_config_dir "$PRESET_BIN_DIR")"
+export KANO_REPORT_ROOT="${KANO_REPORT_ROOT:-$CPP_ROOT/.kano/tmp/pgo/test-reports}"
+export KANO_REPORT_SLUG="${KANO_REPORT_SLUG:-test}"
+export KANO_TEST_LANE="$REPORT_LANE"
+export KANO_REPORT_COMMAND="${KANO_REPORT_COMMAND:-pixi run gather-reports}"
+export KANO_TEST_SUITE_MAP_REL="${KANO_TEST_SUITE_MAP_REL:-raw/suite-map.kano-git-master.json}"
+export KANO_TEST_REPORTS_ROOT="${KANO_TEST_REPORTS_ROOT:-$KANO_REPORT_ROOT/test-reports}"
+export KANO_COVERAGE_REPORTS_ROOT="${KANO_COVERAGE_REPORTS_ROOT:-$KANO_REPORT_ROOT/coverage-reports}"
+export KANO_TEST_XML="${KANO_TEST_XML:-$KANO_TEST_REPORTS_ROOT/$KANO_REPORT_SLUG/tests.xml}"
+export KANO_BDD_METADATA_DIR="${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}"
+export KANO_TEST_COMMAND="${KANO_TEST_COMMAND:-bash \"$CPP_ROOT/code/tests/run_tests.sh\" \"$DETECTED_PRESET\" \"$REPORT_LANE\"}"
 
-if [[ -z "$EXE_DIR" ]]; then
-    echo "[ERROR] No test binaries found under $PRESET_BIN_DIR/{debug,release,relwithdebinfo}" >&2
-    echo "[ERROR] Run 'pixi run --manifest-path src/cpp/shared/infra/pixi.toml build' first." >&2
-    exit 1
-fi
-
-CLI_TEST="$EXE_DIR/kano_git_cli_tests.exe"
-TUI_TEST="$EXE_DIR/kano_git_tui_tests.exe"
-
-if [[ ! -f "$CLI_TEST" ]]; then
-    echo "[ERROR] CLI test binary not found: $CLI_TEST" >&2
-    exit 1
-fi
-if [[ ! -f "$TUI_TEST" ]]; then
-    echo "[ERROR] TUI test binary not found: $TUI_TEST" >&2
-    exit 1
-fi
-
-# ─── Derive KANO_REPORT_SLUG from actual config subdir ─────────────────────────
-CONFIG_SUBDIR="$(basename "$EXE_DIR")"
-export KANO_REPORT_SLUG="${KANO_REPORT_SLUG:-${DETECTED_PRESET}-${CONFIG_SUBDIR}}"
-
-# ─── Infer KANO_TEST_COMMAND ────────────────────────────────────────────────────
-export KANO_TEST_COMMAND="${KANO_TEST_COMMAND:-"$CLI_TEST && $TUI_TEST"}"
-export KANO_BDD_METADATA_DIR="${KANO_BDD_METADATA_DIR:-${KANO_REPORT_ROOT:-$REPO_ROOT/.kano/tmp/reports}/raw/bdd-metadata}"
-export KANO_TEST_BINARY_NAME="${KANO_TEST_BINARY_NAME:-kano_git_cli_tests}"
-
-if [[ -n "${KANO_TEST_XML:-}" && -f "${KANO_TEST_XML}" ]]; then
-    python "$INFRA_BASE_DIR/scripts/tools/generate-bdd-metadata-from-junit.py" \
-      "$KANO_TEST_XML" \
-      "$KANO_BDD_METADATA_DIR" \
-      "$KANO_TEST_BINARY_NAME"
-fi
+mkdir -p "$KANO_REPORT_ROOT/raw" "$KANO_BDD_METADATA_DIR"
+cp -f "$INFRA_BASE_DIR/config/suite-map.kano-git-master.json" "$KANO_REPORT_ROOT/raw/suite-map.kano-git-master.json"
 
 exec bash "$report_script" "$@"

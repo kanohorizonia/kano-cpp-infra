@@ -37,7 +37,7 @@ def main() -> int:
     out_dir = Path(sys.argv[2])
     binary_name = sys.argv[3]
     if not xml_path.is_file():
-        return 0
+        raise SystemExit(f'tests.xml not found: {xml_path}')
 
     root = ET.parse(xml_path).getroot()
     cases = root.findall('.//testcase')
@@ -52,6 +52,9 @@ def main() -> int:
         feature = extract_feature(tags)
         scenario_title = strip_tag_suffix(name)
         featured = 'featured' in tags
+        out_path = out_dir / f'{scenario_id}.json'
+        if out_path.exists():
+            continue
         metadata = {
             'style': 'bdd',
             'layer': 'functional',
@@ -78,7 +81,7 @@ def main() -> int:
             'project': 'kano-git-master-skill',
             'domain': feature,
         }
-        (out_dir / f'{scenario_id}.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
+        out_path.write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
     return 0
 
 

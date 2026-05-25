@@ -1,12 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+report_skill_default_repo_root() {
+  local search_root git_root adapter_dir infra_mount_root consuming_root
+
+  search_root="${KANO_CPP_INFRA_REPO_ROOT:-$PWD}"
+  git_root="$(git -C "$search_root" rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+  adapter_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+  infra_mount_root="$(cd -- "$adapter_dir/../.." >/dev/null 2>&1 && pwd)"
+  if consuming_root="$(cd -- "$infra_mount_root/../../../.." >/dev/null 2>&1 && pwd)"; then
+    if [[ "$infra_mount_root" == "$consuming_root/src/cpp/shared/infra" ]]; then
+      printf '%s\n' "$consuming_root"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "$git_root"
+}
+
 report_skill_find_root() {
   local repo_root="${1:-}"
   local parent_root candidate
 
   if [[ -z "$repo_root" ]]; then
-    repo_root="$(git -C "${KANO_CPP_INFRA_REPO_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null || pwd)"
+    repo_root="$(report_skill_default_repo_root)"
   fi
   parent_root="$(cd -- "$repo_root/.." >/dev/null 2>&1 && pwd)"
 
@@ -29,12 +47,13 @@ report_skill_load() {
   local skill_root
   local repo_root
 
-  repo_root="$(git -C "${KANO_CPP_INFRA_REPO_ROOT:-$PWD}" rev-parse --show-toplevel 2>/dev/null || pwd)"
+  repo_root="$(report_skill_default_repo_root)"
 
   export KANO_CPP_INFRA_REPO_ROOT="$repo_root"
   export KANO_CPP_INFRA_CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-$repo_root/src/cpp}"
   export KANO_WORKSPACE_ROOT="$KANO_CPP_INFRA_REPO_ROOT"
   export KANO_CPP_INFRA_REPORT_ROOT="${KANO_CPP_INFRA_REPORT_ROOT:-$repo_root/.kano/tmp/reports}"
+  export KANO_REPORT_ROOT="${KANO_REPORT_ROOT:-$KANO_CPP_INFRA_REPORT_ROOT}"
 
   if ! skill_root="$(report_skill_find_root "$repo_root")"; then
     echo "[ERROR] kano-cpp-test-skill not found." >&2

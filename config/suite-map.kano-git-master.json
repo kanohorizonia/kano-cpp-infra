@@ -1,5 +1,16 @@
 {
   "rules": [
+    { "suite": "bdd-scenarios", "match": { "any": ["[bdd]", "scenario:", "KOG-BDD-", "ScenarioRecorder", "Given ", "When ", "Then "] } },
+    { "suite": "bdd-featured", "match": { "any": ["[featured]", "featured scenario", "docVisibility=public", "featured=true"] } },
+    { "suite": "tdd-unit", "match": { "any": ["[tdd]", "[unit]", "unit", "kano_git_tui_tests", "kano_git_commit_plan_tests"] } },
+    { "suite": "ai-provider-bootstrap", "match": { "any": ["feature:ai-provider-bootstrap", "KOG-BDD-AI-", "ai provider", "provider bootstrap", "copilot"] } },
+    { "suite": "ai-model-resolution", "match": { "any": ["feature:ai-model-resolution", "model-resolution", "model-selection", "model-args", "provider-auto", "kog-auto"] } },
+    { "suite": "converge", "match": { "any": ["feature:converge", "KOG-BDD-CONVERGE-", "converge", "cpa"] } },
+    { "suite": "converge-state", "match": { "any": ["feature:converge-state", "converge state", "workflow state", "resume", "abort"] } },
+    { "suite": "status-policy", "match": { "any": ["feature:status-policy", "KOG-BDD-STATUS-", "status policy", "dirty detection", "behind remote"] } },
+    { "suite": "dirty-kind", "match": { "any": ["feature:dirty-kind", "dirtyKind", "UNTRACKED_ONLY", "GITLINK_DIRTY", "CONFLICTED", "BEHIND_ONLY", "AHEAD_ONLY"] } },
+    { "suite": "discovery", "match": { "any": ["feature:discovery", "KOG-BDD-DISCOVERY-", "workspace discover", "repo discovery", "submodule", "subrepo", "external-root"] } },
+    { "suite": "repo-operation-scheduler", "match": { "any": ["feature:repo-operation-scheduler", "repo operation scheduler", "RunRepoOperationScheduler", "dependency waves", "common-dir locks"] } },
     { "suite": "repo-discovery", "match": { "any": ["workspace discover", "repo discovery", "submodule", "subrepo", "external-root"] } },
     { "suite": "status-log", "match": { "any": ["repo status", "status", "log", "diff", "remote preview", "behind remote"] } },
     { "suite": "fetch-sync", "match": { "any": ["fetch", "sync", "origin-latest", "recursive workspace fetch"] } },
