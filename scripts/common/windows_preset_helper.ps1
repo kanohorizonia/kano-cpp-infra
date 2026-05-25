@@ -353,31 +353,31 @@ function Get-CMakeInputsFingerprint([string]$InRoot) {
   if ([string]::IsNullOrWhiteSpace($root)) {
     $root = $InRoot
   }
-  
+
   # Key files that affect configure output
   $inputFiles = @(
     (Join-Path $root "CMakeLists.txt"),
     (Join-Path $root "CMakePresets.json"),
     (Join-Path $root "vcpkg.json")
   )
-  
+
   # Also include all subdirectory CMakeLists.txt
   $subCMakeLists = Get-ChildItem -LiteralPath $root -Recurse -File -Filter "CMakeLists.txt" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
   if ($subCMakeLists) {
     $inputFiles += $subCMakeLists
   }
-  
+
   # Filter to existing files only
   $existingFiles = $inputFiles | Where-Object { Test-Path -LiteralPath $_ }
-  
+
   if ($existingFiles.Count -eq 0) {
     return ""
   }
-  
+
   # Compute combined hash
   $hash = [System.Security.Cryptography.SHA256]::Create()
   $combined = ""
-  
+
   foreach ($file in ($existingFiles | Sort-Object)) {
     $content = Get-Content -LiteralPath $file -Raw -ErrorAction SilentlyContinue
     if ($content) {
@@ -396,11 +396,11 @@ function Get-CMakeInputsFingerprint([string]$InRoot) {
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($part)
     $hash.TransformBlock($bytes, 0, $bytes.Length, $null, 0) | Out-Null
   }
-  
+
   $hash.TransformFinalBlock(@(), 0, 0) | Out-Null
   $fingerprint = [System.BitConverter]::ToString($hash.Hash) -replace "-", ""
   $hash.Dispose()
-  
+
   return $fingerprint
 }
 
@@ -665,22 +665,65 @@ function Write-CompilerCacheSummary([string]$Phase, [string]$BuildDir = "") {
   }
 }
 
+function Get-WindowsSdkToolPaths {
+  $roots = @(
+    'C:\Program Files (x86)\Windows Kits\10\bin',
+    'C:\Program Files\Windows Kits\10\bin'
+  )
+
+  $latestDir = $null
+  foreach ($root in $roots) {
+    if (-not (Test-Path -LiteralPath $root)) {
+      continue
+    }
+
+    $dirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending
+    foreach ($dir in $dirs) {
+      $candidate = Join-Path $dir.FullName 'x64'
+      if (Test-Path -LiteralPath $candidate) {
+        $latestDir = $candidate
+        break
+      }
+    }
+    if ($latestDir) {
+      break
+    }
+  }
+
+  if (-not $latestDir) {
+    return $null
+  }
+
+  $rc = Join-Path $latestDir 'rc.exe'
+  $mt = Join-Path $latestDir 'mt.exe'
+  if ((-not (Test-Path -LiteralPath $rc)) -or (-not (Test-Path -LiteralPath $mt))) {
+    return $null
+  }
+
+  return @{
+    Rc = $rc
+    Mt = $mt
+  }
+}
+
 function Run-Preset([string]$InRoot,
                     [string]$InVcvars,
                     [string]$InArch,
                     [string]$InConfigurePreset,
                     [string]$InBuildPreset,
                     [string]$InVcvarsVersion) {
+
   Set-Location -LiteralPath $InRoot
   Normalize-CompilerCacheEnvironment
   Ensure-CompilerCacheServerConfiguration
-  
+
   $buildDir = Join-Path $InRoot "out\obj\$InConfigurePreset"
-  
+
   # Compute current fingerprint of configure inputs
   $currentFingerprint = Get-CMakeInputsFingerprint -InRoot $InRoot
   $storedFingerprint = Get-StoredConfigureFingerprint -InBuildDir $buildDir
-  
+
   $shouldConfigure = $true
   if ($currentFingerprint -and $storedFingerprint -and ($currentFingerprint -eq $storedFingerprint)) {
     $shouldConfigure = $false
@@ -695,14 +738,22 @@ function Run-Preset([string]$InRoot,
       Write-Host "[launcher][cmake][info] Compiler launcher cache mismatch detected, rerunning cmake --preset"
     }
   }
-  
+
   $quotedVcvars = '"' + $InVcvars + '"'
-  
+
   if ($shouldConfigure) {
     $configureCommand = "cmake --preset $InConfigurePreset"
     foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) {
       $configureCommand += " " + $additionalArgument
     }
+
+      $sdkTools = Get-WindowsSdkToolPaths
+      if ($sdkTools) {
+        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MT" -Value $sdkTools.Mt)
+        $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_RC_COMPILER" -Value $sdkTools.Rc)
+        Write-Host "[launcher][cmake][info] forcing SDK tools mt=$($sdkTools.Mt) rc=$($sdkTools.Rc)"
+      }
+
     $launcherPath = Get-EffectiveCompilerLauncherPath
     $isFastBuild = ($env:INF_FASTBUILD_ENABLED -eq "1")
     if ($isFastBuild) {
@@ -731,7 +782,7 @@ function Run-Preset([string]$InRoot,
       Set-StoredConfigureFingerprint -InBuildDir $buildDir -InFingerprint $currentFingerprint
     }
   }
-  
+
   # Always run build (this is the incremental part)
   Write-CompilerCacheSummary "before-build" $buildDir
   $buildCommand = "cmake --build --preset $InBuildPreset"

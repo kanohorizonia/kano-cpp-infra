@@ -103,6 +103,27 @@ run_global_tool_install() {
   kano_pixi_bootstrap_install_global_tools
 }
 
+expose_pixi_global_bin() {
+  local pixi_bin=""
+
+  if [[ -n "${USERPROFILE:-}" ]]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      pixi_bin="$(cygpath -u "${USERPROFILE}")/.pixi/bin"
+    else
+      pixi_bin="$(printf '%s' "${USERPROFILE}" | sed 's|\\|/|g; s|^\([A-Za-z]\):|/\L\1|')/.pixi/bin"
+    fi
+  fi
+
+  if [[ -z "$pixi_bin" || ! -d "$pixi_bin" ]]; then
+    pixi_bin="${HOME}/.pixi/bin"
+  fi
+
+  if [[ -d "$pixi_bin" && ":$PATH:" != *":$pixi_bin:"* ]]; then
+    export PATH="$pixi_bin:$PATH"
+    echo "[prereq][windows] added pixi global bin to PATH: $pixi_bin"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # 3. Delegate to platform/win64/prerequisite.ps1 for MSVC and winget packages
 #    (skips cmake/ninja/git automatically when already provided by pixi)
@@ -118,6 +139,88 @@ run_platform_prereqs() {
   bash "$PLATFORM_SCRIPT"
 }
 
+verify_vcvarsall_ready() {
+  if [[ -n "${KANO_VCVARSALL:-}" && -f "${KANO_VCVARSALL}" ]]; then
+    echo "[prereq][windows] vcvarsall ready via KANO_VCVARSALL: ${KANO_VCVARSALL}"
+    return 0
+  fi
+
+  local candidate=""
+  local vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+
+  if [[ -x "$vswhere" ]]; then
+    candidate="$($vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\\Auxiliary\\Build\\vcvarsall.bat' 2>/dev/null | head -n 1 || true)"
+    candidate="${candidate//$'\r'/}"
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      export KANO_VCVARSALL="$candidate"
+      echo "[prereq][windows] vcvarsall discovered: $candidate"
+      return 0
+    fi
+  fi
+
+  shopt -s nullglob
+  for candidate in \
+    /c/Program\ Files/Microsoft\ Visual\ Studio/*/*/VC/Auxiliary/Build/vcvarsall.bat \
+    /c/Program\ Files\ \(x86\)/Microsoft\ Visual\ Studio/*/*/VC/Auxiliary/Build/vcvarsall.bat; do
+    if [[ -f "$candidate" ]]; then
+      shopt -u nullglob
+      export KANO_VCVARSALL="$candidate"
+      echo "[prereq][windows] vcvarsall discovered via fallback: $candidate"
+      return 0
+    fi
+  done
+  shopt -u nullglob
+
+  echo "[prereq][windows] ERROR: vcvarsall.bat not found after prerequisite bootstrap." >&2
+  echo "[prereq][windows] If Visual Studio installer is busy (exit 1618), wait for it to finish and rerun 'kog self build'." >&2
+  echo "[prereq][windows] Or set KANO_VCVARSALL manually to your vcvarsall.bat path." >&2
+  return 1
+}
+
+resolve_windows_sdk_bin_dir() {
+  local root candidate latest=""
+
+  for root in \
+    "/c/Program Files (x86)/Windows Kits/10/bin" \
+    "/c/Program Files/Windows Kits/10/bin"; do
+    [[ -d "$root" ]] || continue
+
+    shopt -s nullglob
+    for candidate in "$root"/*/x64; do
+      [[ -d "$candidate" ]] || continue
+      if [[ -z "$latest" || "$candidate" > "$latest" ]]; then
+        latest="$candidate"
+      fi
+    done
+    shopt -u nullglob
+  done
+
+  if [[ -n "$latest" ]]; then
+    printf '%s\n' "$latest"
+    return 0
+  fi
+
+  return 1
+}
+
+verify_windows_sdk_tools_ready() {
+  local sdk_bin=""
+  if ! sdk_bin="$(resolve_windows_sdk_bin_dir)"; then
+    echo "[prereq][windows] ERROR: Windows SDK tools not found (missing Windows Kits bin/x64)." >&2
+    echo "[prereq][windows] Re-run 'kog self install-prereq' after Visual Studio installer finishes." >&2
+    return 1
+  fi
+
+  if [[ ! -f "$sdk_bin/rc.exe" || ! -f "$sdk_bin/mt.exe" ]]; then
+    echo "[prereq][windows] ERROR: Windows SDK incomplete at $sdk_bin (rc.exe/mt.exe missing)." >&2
+    echo "[prereq][windows] Re-run 'kog self install-prereq' to install SDK components." >&2
+    return 1
+  fi
+
+  echo "[prereq][windows] Windows SDK tools ready: $sdk_bin"
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -125,7 +228,10 @@ echo "[prereq][windows] starting Windows prerequisite bootstrap"
 
 ensure_pixi
 run_global_tool_install
+expose_pixi_global_bin
 run_pixi_install
 run_platform_prereqs
+verify_vcvarsall_ready
+verify_windows_sdk_tools_ready
 
 echo "[prereq][windows] Windows prerequisite bootstrap complete"

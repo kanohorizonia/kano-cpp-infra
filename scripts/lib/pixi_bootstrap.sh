@@ -169,6 +169,20 @@ kano_pixi_bootstrap_activate() {
   export TMP="${TMP:-${TEMP:-/tmp}}"
 
   if ! pixi_cmd="$(command -v pixi 2>/dev/null)"; then
+    local candidate
+    for candidate in \
+      "${PIXI_HOME:-}/bin/pixi" \
+      "${USERPROFILE:-}/.pixi/bin/pixi" \
+      "${HOME}/.pixi/bin/pixi"; do
+      if [[ -n "$candidate" && -x "$candidate" ]]; then
+        pixi_cmd="$candidate"
+        export PATH="$(dirname "$pixi_cmd"):$PATH"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$pixi_cmd" ]]; then
     printf '[pixi-bootstrap] ERROR: manifest exists but pixi not found; fail-fast: %s\n' "$manifest_path" >&2
     return 1
   fi

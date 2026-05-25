@@ -174,6 +174,51 @@ function Get-AdditionalCMakeCacheArguments {
   return $arguments.ToArray()
 }
 
+function Get-WindowsSdkToolPaths {
+  $roots = @(
+    'C:\Program Files (x86)\Windows Kits\10\bin',
+    'C:\Program Files\Windows Kits\10\bin'
+  )
+
+  $latestDir = $null
+  foreach ($root in $roots) {
+    if (-not (Test-Path -LiteralPath $root)) {
+      continue
+    }
+
+    $dirs = Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue |
+      Sort-Object Name -Descending
+    foreach ($dir in $dirs) {
+      $candidate = Join-Path $dir.FullName 'x64'
+      if (Test-Path -LiteralPath $candidate) {
+        $latestDir = $candidate
+        break
+      }
+    }
+    if ($latestDir) {
+      break
+    }
+  }
+
+  if (-not $latestDir) {
+    return $null
+  }
+
+  $rc = Join-Path $latestDir 'rc.exe'
+  $mt = Join-Path $latestDir 'mt.exe'
+  if ((-not (Test-Path -LiteralPath $rc)) -or (-not (Test-Path -LiteralPath $mt))) {
+    return $null
+  }
+
+  $rc = $rc -replace '\\','/'
+  $mt = $mt -replace '\\','/'
+
+  return @{
+    Rc = $rc
+    Mt = $mt
+  }
+}
+
 function Get-PixiEnvironmentRoot([string]$ProjectRoot) {
   # Check for infra-level pixi env first (src/cpp/shared/infra/.pixi/envs/default)
   # This takes priority over root-level .pixi since infra has its own environment
@@ -263,7 +308,7 @@ function Get-PixiBuildToolPrefix([string]$ProjectRoot) {
   $cmakePath = Get-GlobalToolPath "cmake"
   $ninjaPath = Get-GlobalToolPath "ninja"
   $resolved = New-Object System.Collections.Generic.List[string]
-  
+
   if ($cmakePath -and $ninjaPath) {
     $cmakeDir = Split-Path -Parent $cmakePath
     if ($cmakeDir) {
@@ -390,6 +435,12 @@ function Run-Preset {
   $configureCommand = "cmake --preset $ConfigurePreset"
   $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM:FILEPATH" -Value $pixiNinjaPath)
   foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
+  $sdkTools = Get-WindowsSdkToolPaths
+  if ($sdkTools) {
+    $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MT" -Value $sdkTools.Mt)
+    $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_RC_COMPILER" -Value $sdkTools.Rc)
+    Write-Host "[launcher][cmake][info] forcing SDK tools mt=$($sdkTools.Mt) rc=$($sdkTools.Rc)"
+  }
 
   $vcvarsCommand = ('call "{0}" {1} -vcvars_ver={2}' -f $resolvedVcvars, $Arch, $VcvarsVersion)
   Invoke-CmdSteps @(
@@ -421,6 +472,12 @@ function Configure-Preset {
   $configureCommand = "cmake --preset $ConfigurePreset"
   $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM:FILEPATH" -Value $pixiNinjaPath)
   foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
+  $sdkTools = Get-WindowsSdkToolPaths
+  if ($sdkTools) {
+    $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MT" -Value $sdkTools.Mt)
+    $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_RC_COMPILER" -Value $sdkTools.Rc)
+    Write-Host "[launcher][cmake][info] forcing SDK tools mt=$($sdkTools.Mt) rc=$($sdkTools.Rc)"
+  }
 
   $vcvarsCommand = ('call "{0}" {1} "-vcvars_ver={2}"' -f $resolvedVcvars, $Arch, $VcvarsVersion)
   Invoke-CmdSteps @(
@@ -463,6 +520,12 @@ function Build-Presets {
     $configureCommand = "cmake --preset $configurePreset"
     $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM:FILEPATH" -Value $pixiNinjaPath)
     foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
+    $sdkTools = Get-WindowsSdkToolPaths
+    if ($sdkTools) {
+      $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MT" -Value $sdkTools.Mt)
+      $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_RC_COMPILER" -Value $sdkTools.Rc)
+      Write-Host "[launcher][cmake][info] forcing SDK tools mt=$($sdkTools.Mt) rc=$($sdkTools.Rc)"
+    }
 
     Write-Host "=== Configuring $configurePreset ($presetArch) ===" -ForegroundColor Cyan
     Invoke-CmdSteps @(
@@ -492,37 +555,37 @@ function Kano-TestPath {
 
 function Validate-MsvcToolsetHeaders {
   param([string]$VcvarsVersion)
-  
+
   # Detect Visual Studio root from vcvarsall location
   $resolvedVcvars = $Vcvars
-  if ([string]::IsNullOrWhiteSpace($resolvedVcvars)) { 
-    $resolvedVcvars = Detect-Vcvarsall 
+  if ([string]::IsNullOrWhiteSpace($resolvedVcvars)) {
+    $resolvedVcvars = Detect-Vcvarsall
   }
-  if ([string]::IsNullOrWhiteSpace($resolvedVcvars)) { 
+  if ([string]::IsNullOrWhiteSpace($resolvedVcvars)) {
     throw "vcvarsall.bat not found; cannot validate toolset headers"
   }
-  
+
   # Extract Visual Studio root from vcvarsall path
   # e.g., C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat
   # Walk up 3 levels: Build → Auxiliary → VC (now at VC)
   # Then walk up 1 more: VC → Community (now at installation root like Community/Professional/Enterprise)
   $vsRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $resolvedVcvars)))
-  
+
   # Construct toolset include directory path
   # e.g., C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include
   $toolsetInclude = Join-Path $vsRoot "VC\Tools\MSVC\$VcvarsVersion\include"
-  
+
   # Required header files for a native C++ build
   $requiredHeaders = @("string", "filesystem", "chrono", "vcruntime.h")
   $missingHeaders = @()
-  
+
   foreach ($header in $requiredHeaders) {
     $headerPath = Join-Path $toolsetInclude $header
     if (-not (Test-Path -LiteralPath $headerPath)) {
       $missingHeaders += $header
     }
   }
-  
+
   if ($missingHeaders.Count -gt 0) {
     $missingList = [string]::Join(", ", $missingHeaders)
     throw "Selected MSVC toolset ($VcvarsVersion) is incomplete. Missing core headers: $missingList. " + `
