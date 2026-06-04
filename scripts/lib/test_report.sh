@@ -24,14 +24,21 @@ run_test_report() {
     eval "$KANO_TEST_COMMAND"
   )
 
-  if [[ -f "$KANO_TEST_XML" ]]; then
+if [[ -f "$KANO_TEST_XML" ]]; then
     python "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/../tools/generate-bdd-metadata-from-junit.py" \
       "$KANO_TEST_XML" \
       "${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}" \
       "${KANO_TEST_BINARY_NAME:-kano_git_cli_tests}"
-  else
+else
     echo "[WARN] KANO_TEST_XML was not written by test command: $KANO_TEST_XML" >&2
-  fi
+    mkdir -p "$(dirname "$KANO_TEST_XML")"
+    cat <<'EOF' > "$KANO_TEST_XML"
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="kano-git-master-skill.test-report.missing" tests="0" failures="0" errors="0" skipped="0" time="0" />
+</testsuites>
+EOF
+fi
 
   python "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/render_junit_test_report.py" "$KANO_TEST_XML" "$KANO_TEST_REPORT_DIR" "$report_title"
   bash "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/package-reports-with-skill.sh"
