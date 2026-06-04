@@ -22,17 +22,24 @@ report_skill_default_repo_root() {
 report_skill_find_root() {
   local repo_root="${1:-}"
   local parent_root candidate
+  local fallback_skill_root=""
+  local home_root=""
 
   if [[ -z "$repo_root" ]]; then
     repo_root="$(report_skill_default_repo_root)"
   fi
   parent_root="$(cd -- "$repo_root/.." >/dev/null 2>&1 && pwd)"
+  home_root="${KANO_HOME:-${HOME:-}}"
+  if [[ -n "$home_root" ]]; then
+    fallback_skill_root="$home_root/.agents/skills/kano/kano-cpp-test-skill"
+  fi
 
   for candidate in \
     "${KANO_CPP_TEST_SKILL_ROOT:-}" \
     "${KANO_CPP_INFRA_TEST_SKILL_ROOT:-}" \
     "$repo_root/_tools/kano-cpp-test-skill" \
-    "$parent_root/kano-cpp-test-skill"
+    "$parent_root/kano-cpp-test-skill" \
+    "$fallback_skill_root"
   do
     [[ -n "$candidate" ]] || continue
     if [[ -f "$candidate/src/shell/reports/common/report-env.sh" ]]; then
