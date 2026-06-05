@@ -141,13 +141,13 @@ full-test = "bash scripts/stages/test-lane.sh full linux-ninja-gcc-release"
 
 [target.osx-64.tasks]
 # Development build (Debug preset - fast iteration)
-build-debug = "bash scripts/platform/mac/native-build.sh"
+build-debug = "bash scripts/platform/mac/native-build.sh macos-ninja-clang-x64 macos-ninja-clang-x64-debug"
 ensure-coverage-tools = "bash scripts/stages/ensure-coverage-tools.sh"
 
 # Release build (optimized)
-build-release = "bash scripts/self/build.sh"
-build = "bash scripts/self/build.sh"
-rebuild = "bash scripts/self/rebuild.sh"
+build-release = "bash scripts/self/build.sh macos-ninja-clang-x64 macos-ninja-clang-x64-release"
+build = "bash scripts/self/build.sh macos-ninja-clang-x64 macos-ninja-clang-x64-release"
+rebuild = "bash scripts/self/rebuild.sh macos-ninja-clang-x64 macos-ninja-clang-x64-release"
 
 # Remote macOS build
 build-remote = "bash scripts/platform/mac/remote-build.sh"
@@ -176,13 +176,13 @@ full-test = "bash scripts/stages/test-lane.sh full macos-ninja-clang-x64-release
 
 [target.osx-arm64.tasks]
 # Development build (Debug preset - fast iteration)
-build-debug = "bash scripts/platform/mac/native-build.sh"
+build-debug = "bash scripts/platform/mac/native-build.sh macos-ninja-clang-arm64 macos-ninja-clang-arm64-debug"
 ensure-coverage-tools = "bash scripts/stages/ensure-coverage-tools.sh"
 
 # Release build (optimized)
-build-release = "bash scripts/self/build.sh"
-build = "bash scripts/self/build.sh"
-rebuild = "bash scripts/self/rebuild.sh"
+build-release = "bash scripts/self/build.sh macos-ninja-clang-arm64 macos-ninja-clang-arm64-release"
+build = "bash scripts/self/build.sh macos-ninja-clang-arm64 macos-ninja-clang-arm64-release"
+rebuild = "bash scripts/self/rebuild.sh macos-ninja-clang-arm64 macos-ninja-clang-arm64-release"
 
 # Remote macOS build
 build-remote = "bash scripts/platform/mac/remote-build.sh"
