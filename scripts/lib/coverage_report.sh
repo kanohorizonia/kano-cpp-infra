@@ -483,8 +483,8 @@ coverage_merge() {
             echo "[coverage_merge] ERROR: llvm-profdata not executable: $llvm_profdata" >&2
             return 1
         fi
-        if [[ -x "$llvm_profdata" ]]; then
-            llvm_profdata="llvm-profdata"
+        if [[ ! -x "$llvm_profdata" ]]; then
+            llvm_profdata="$(command -v llvm-profdata)"
         fi
 
         local -a profraw_files=()
@@ -580,8 +580,8 @@ coverage_report() {
             coverage_write_status "TOOL_FAILED" "LLVM_COV_NOT_EXECUTABLE" "$llvm_cov"
             return 1
         fi
-        if [[ -x "$llvm_cov" ]]; then
-            llvm_cov="llvm-cov"
+        if [[ ! -x "$llvm_cov" ]]; then
+            llvm_cov="$(command -v llvm-cov)"
         fi
 
         # HTML report
