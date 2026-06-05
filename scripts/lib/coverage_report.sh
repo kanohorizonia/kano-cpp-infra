@@ -16,6 +16,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INF_CPP_ROOT_DEFAULT="$(cd -- "$SCRIPT_DIR/../../../.." && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/docker_host.sh"
 # shellcheck disable=SC1091
@@ -24,7 +25,30 @@ source "$SCRIPT_DIR/matrix.sh"
 # ─────────────────────────────────────────────────────────────────────────────
 # Coverage directories
 # ─────────────────────────────────────────────────────────────────────────────
-INF_COVERAGE_ROOT="${INF_COVERAGE_ROOT:-${INF_BUILD_ROOT:-$(pwd)/build}/coverage}"
+coverage_resolve_root_path() {
+    local raw_path="${1:-}"
+    local normalized=""
+    local base_root="${INF_CPP_ROOT:-${KANO_CPP_INFRA_CPP_ROOT:-${KANO_CPP_ROOT:-$INF_CPP_ROOT_DEFAULT}}}"
+
+    if [[ -z "$raw_path" ]]; then
+        return 0
+    fi
+
+    normalized="${raw_path//\\//}"
+    if command -v cygpath >/dev/null 2>&1 && [[ "$normalized" =~ ^[A-Za-z]:/ ]]; then
+        cygpath -u "$normalized"
+        return 0
+    fi
+    if [[ "$normalized" == /* ]]; then
+        printf '%s\n' "$normalized"
+        return 0
+    fi
+    normalized="${normalized#./}"
+    printf '%s/%s\n' "${base_root%/}" "$normalized"
+}
+
+INF_COVERAGE_ROOT="${INF_COVERAGE_ROOT:-${INF_BUILD_ROOT:-$INF_CPP_ROOT_DEFAULT/out}/coverage}"
+INF_COVERAGE_ROOT="$(coverage_resolve_root_path "$INF_COVERAGE_ROOT")"
 INF_COVERAGE_PROFRAW_DIR="$INF_COVERAGE_ROOT/profraw"
 INF_COVERAGE_PROFDATA="$INF_COVERAGE_ROOT/merged.profdata"
 INF_COVERAGE_HTML_DIR="$INF_COVERAGE_ROOT/html"
@@ -113,7 +137,7 @@ coverage_default_test_binary() {
 
 coverage_binary_candidate_dirs() {
     local preset="${1:-}"
-    local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
+    local cpp_root="${INF_CPP_ROOT:-${KANO_CPP_INFRA_CPP_ROOT:-$INF_CPP_ROOT_DEFAULT}}"
 
     case "$preset" in
         linux-*)
