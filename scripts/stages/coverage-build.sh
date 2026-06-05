@@ -25,4 +25,20 @@ if [[ -z "${INF_COVERAGE_ROOT:-}" ]]; then
 fi
 
 coverage_script="$(kano_cpp_infra_matrix_default_coverage_build_script)"
+default_args=()
+
+case "$(kano_cpp_infra_matrix_host_os)" in
+  mac|linux)
+    configure_preset="$(kano_cpp_infra_matrix_default_coverage_configure_preset || true)"
+    build_preset="$(kano_cpp_infra_matrix_default_coverage_build_preset || true)"
+    if [[ -n "$configure_preset" && -n "$build_preset" ]]; then
+      default_args=("$configure_preset" "$build_preset")
+    fi
+    ;;
+esac
+
+if [[ "$#" -eq 0 ]]; then
+  exec bash "$coverage_script" "${default_args[@]}"
+fi
+
 exec bash "$coverage_script" "$@"

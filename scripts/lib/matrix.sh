@@ -3,8 +3,9 @@
 set -euo pipefail
 
 KANO_CPP_INFRA_MATRIX_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-KANO_CPP_INFRA_MATRIX_CPP_ROOT="$(cd -- "$KANO_CPP_INFRA_MATRIX_SCRIPT_DIR/../../../../.." && pwd)"
+KANO_CPP_INFRA_MATRIX_CPP_ROOT="$(cd -- "$KANO_CPP_INFRA_MATRIX_SCRIPT_DIR/../../../.." && pwd)"
 KANO_CPP_INFRA_MATRIX_BASE="$KANO_CPP_INFRA_MATRIX_SCRIPT_DIR/.."
+KANO_CPP_INFRA_MATRIX_CMAKE_PRESETS="$KANO_CPP_INFRA_MATRIX_CPP_ROOT/CMakePresets.json"
 
 kano_cpp_infra_matrix_is_wsl() {
   [[ "$(uname -s 2>/dev/null || true)" == Linux* ]] && \
@@ -28,6 +29,92 @@ kano_cpp_infra_matrix_arch() {
   case "$arch" in
     aarch64|arm64) printf '%s\n' arm64 ;;
     *) printf '%s\n' x64 ;;
+  esac
+}
+
+kano_cpp_infra_matrix_preset_exists() {
+  local preset="${1:-}"
+  [[ -n "$preset" ]] || return 1
+  [[ -f "$KANO_CPP_INFRA_MATRIX_CMAKE_PRESETS" ]] || return 1
+  grep -Fq "\"name\": \"${preset}\"" "$KANO_CPP_INFRA_MATRIX_CMAKE_PRESETS"
+}
+
+kano_cpp_infra_matrix_first_existing_preset() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -n "$candidate" ]] && kano_cpp_infra_matrix_preset_exists "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+kano_cpp_infra_matrix_default_coverage_configure_preset() {
+  local os_name arch
+  os_name="$(kano_cpp_infra_matrix_host_os)"
+  arch="$(kano_cpp_infra_matrix_arch)"
+  case "$os_name" in
+    win64)
+      kano_cpp_infra_matrix_first_existing_preset windows-ninja-msvc-coverage windows-ninja-msvc
+      ;;
+    mac)
+      if [[ "$arch" == "arm64" ]]; then
+        kano_cpp_infra_matrix_first_existing_preset \
+          macos-ninja-clang-arm64-coverage \
+          macos-ninja-clang-coverage \
+          macos-ninja-clang-arm64 \
+          macos-ninja-clang
+      else
+        kano_cpp_infra_matrix_first_existing_preset \
+          macos-ninja-clang-x64-coverage \
+          macos-ninja-clang-coverage \
+          macos-ninja-clang-x64 \
+          macos-ninja-clang
+      fi
+      ;;
+    *)
+      kano_cpp_infra_matrix_first_existing_preset \
+        linux-ninja-clang-coverage \
+        linux-ninja-gcc-coverage \
+        linux-ninja-clang \
+        linux-ninja-gcc
+      ;;
+  esac
+}
+
+kano_cpp_infra_matrix_default_coverage_build_preset() {
+  local os_name arch
+  os_name="$(kano_cpp_infra_matrix_host_os)"
+  arch="$(kano_cpp_infra_matrix_arch)"
+  case "$os_name" in
+    win64)
+      kano_cpp_infra_matrix_first_existing_preset \
+        windows-ninja-msvc-coverage-debug \
+        windows-ninja-msvc-debug
+      ;;
+    mac)
+      if [[ "$arch" == "arm64" ]]; then
+        kano_cpp_infra_matrix_first_existing_preset \
+          macos-ninja-clang-arm64-coverage-debug \
+          macos-ninja-clang-coverage-debug \
+          macos-ninja-clang-arm64-debug \
+          macos-ninja-clang-debug
+      else
+        kano_cpp_infra_matrix_first_existing_preset \
+          macos-ninja-clang-x64-coverage-debug \
+          macos-ninja-clang-coverage-debug \
+          macos-ninja-clang-x64-debug \
+          macos-ninja-clang-debug
+      fi
+      ;;
+    *)
+      kano_cpp_infra_matrix_first_existing_preset \
+        linux-ninja-clang-coverage-debug \
+        linux-ninja-gcc-coverage-debug \
+        linux-ninja-clang-debug \
+        linux-ninja-gcc-debug
+      ;;
   esac
 }
 

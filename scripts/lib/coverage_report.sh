@@ -18,6 +18,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/docker_host.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/matrix.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Coverage directories
@@ -93,6 +95,44 @@ _is_darwin() { [[ "$(detect_host_os)" == "Darwin" ]]; }
 _is_linux()  { [[ "$(detect_host_os)" == "Linux" ]]; }
 _is_windows(){ [[ "$(detect_host_os)" == MINGW* || "$(detect_host_os)" == CYGWIN* || "$(detect_host_os)" == MSYS* ]]; }
 
+coverage_default_configure_preset() {
+    kano_cpp_infra_matrix_default_coverage_configure_preset
+}
+
+coverage_default_test_binary() {
+    local platform="${1:-$(detect_host_os)}"
+    case "$platform" in
+        Darwin|Linux)
+            printf '%s\n' "kano_git_tui_tests"
+            ;;
+        MINGW*|CYGWIN*|MSYS*|*nt*)
+            printf '%s\n' "kano_git_tui_tests.exe"
+            ;;
+    esac
+}
+
+coverage_resolve_binary_path() {
+    local preset="${1:-}"
+    local test_binary="${2:-}"
+    local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
+
+    case "$preset" in
+        linux-*)
+            if [[ -d "$INF_COVERAGE_ROOT/linux-out/bin/${preset}" ]]; then
+                printf '%s\n' "$INF_COVERAGE_ROOT/linux-out/bin/${preset}/$test_binary"
+            else
+                printf '%s\n' "$cpp_root/out/bin/${preset}/$test_binary"
+            fi
+            ;;
+        macos-*|windows-*)
+            printf '%s\n' "$cpp_root/out/bin/${preset}/$test_binary"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Utility: Ensure directories
 # ─────────────────────────────────────────────────────────────────────────────
@@ -155,9 +195,7 @@ coverage_build() {
     local llvm_cov_path
 
     env_info="$(detect_coverage_env)"
-    platform="${env_info%%:*}"
-    compiler_id="${env_info#*:}"
-    llvm_cov_path="${env_info##*:}"
+    IFS=':' read -r platform compiler_id llvm_cov_path <<< "$env_info"
 
     echo "[coverage_build] Starting coverage build..."
     echo "[coverage_build] Host platform: $(detect_host_os)"
@@ -167,29 +205,7 @@ coverage_build() {
 
     # Auto-select preset if not provided
     if [[ -z "$preset" ]]; then
-        case "$compiler_id" in
-            Clang)
-                if _is_darwin; then
-                    local arch
-                    arch="$(uname -m 2>/dev/null || echo "x86_64")"
-                    if [[ "$arch" == "arm64" || "$arch" == "aarch64" ]]; then
-                        preset="macos-ninja-clang-arm64-coverage"
-                    else
-                        preset="macos-ninja-clang-coverage"
-                    fi
-                elif _is_linux; then
-                    preset="linux-ninja-clang-coverage"
-                fi
-                ;;
-            GNU)
-                if _is_linux; then
-                    preset="linux-ninja-gcc-coverage"
-                fi
-                ;;
-            MSVC)
-                preset="windows-ninja-msvc-coverage"
-                ;;
-        esac
+        preset="$(coverage_default_configure_preset || true)"
         echo "[coverage_build] Auto-selected preset: $preset"
     fi
 
@@ -340,74 +356,23 @@ coverage_run_tests() {
     local llvm_cov_path
 
     env_info="$(detect_coverage_env)"
-    platform="${env_info%%:*}"
-    compiler_id="${env_info#*:}"
-    llvm_cov_path="${env_info##*:}"
+    IFS=':' read -r platform compiler_id llvm_cov_path <<< "$env_info"
 
     echo "[coverage_run_tests] Running tests with coverage..."
 
     # Auto-detect from preset
     if [[ -z "$preset" ]]; then
-        case "$compiler_id" in
-            Clang)
-                if _is_darwin; then
-                    local arch
-                    arch="$(uname -m 2>/dev/null || echo "x86_64")"
-                    if [[ "$arch" == "arm64" ]]; then
-                        preset="macos-ninja-clang-arm64-coverage"
-                    else
-                        preset="macos-ninja-clang-coverage"
-                    fi
-                elif _is_linux; then
-                    preset="linux-ninja-clang-coverage"
-                fi
-                ;;
-            GNU)
-                preset="linux-ninja-gcc-coverage"
-                ;;
-            MSVC)
-                preset="windows-ninja-msvc-coverage"
-                ;;
-        esac
+        preset="$(coverage_default_configure_preset || true)"
     fi
 
     # Auto-detect test binary
     if [[ -z "$test_binary" ]]; then
-        case "$platform" in
-            Darwin|Linux)
-                test_binary="kano_git_tui_tests"
-                ;;
-            MINGW*|CYGWIN*|MSYS*|*nt*)
-                test_binary="kano_git_tui_tests.exe"
-                ;;
-        esac
+        test_binary="$(coverage_default_test_binary "$platform")"
     fi
 
-    # Determine binary path from preset
-    # Note: Linux Docker builds copy output to $INF_COVERAGE_ROOT/linux-out/
-    local binary_dir=""
     local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
     local binary_path=""
-
-    case "$preset" in
-        macos-*)
-            binary_dir="out/bin/${preset}"
-            binary_path="$cpp_root/$binary_dir/$test_binary"
-            ;;
-        linux-*)
-            # Check if Docker build was used (output copied to $INF_COVERAGE_ROOT/linux-out)
-            if [[ -d "$INF_COVERAGE_ROOT/linux-out/bin/${preset}" ]]; then
-                binary_path="$INF_COVERAGE_ROOT/linux-out/bin/${preset}/$test_binary"
-            else
-                binary_dir="out/bin/${preset}"
-                binary_path="$cpp_root/$binary_dir/$test_binary"
-            fi
-            ;;
-        windows-*)
-            binary_dir="out/bin/${preset}"
-            binary_path="$cpp_root/$binary_dir/$test_binary"
-            ;;
-    esac
+    binary_path="$(coverage_resolve_binary_path "$preset" "$test_binary" || true)"
 
     if [[ ! -f "$binary_path" ]]; then
         echo "[coverage_run_tests] ERROR: Binary not found: $binary_path" >&2
@@ -447,9 +412,7 @@ coverage_merge() {
     local llvm_cov_path
 
     env_info="$(detect_coverage_env)"
-    platform="${env_info%%:*}"
-    compiler_id="${env_info#*:}"
-    llvm_cov_path="${env_info##*:}"
+    IFS=':' read -r platform compiler_id llvm_cov_path <<< "$env_info"
 
     echo "[coverage_merge] Merging coverage profiles..."
     echo "[coverage_merge] Platform: $platform, Compiler: $compiler_id"
@@ -519,9 +482,7 @@ coverage_report() {
     local llvm_cov_path
 
     env_info="$(detect_coverage_env)"
-    platform="${env_info%%:*}"
-    compiler_id="${env_info#*:}"
-    llvm_cov_path="${env_info##*:}"
+    IFS=':' read -r platform compiler_id llvm_cov_path <<< "$env_info"
 
     echo "[coverage_report] Generating coverage report..."
     echo "[coverage_report] Platform: $platform, Compiler: $compiler_id"
@@ -530,44 +491,16 @@ coverage_report() {
 
     # Auto-detect preset
     if [[ -z "$preset" ]]; then
-        case "$compiler_id" in
-            Clang)
-                if _is_darwin; then
-                    local arch
-                    arch="$(uname -m 2>/dev/null || echo "x86_64")"
-                    if [[ "$arch" == "arm64" ]]; then
-                        preset="macos-ninja-clang-arm64-coverage"
-                    else
-                        preset="macos-ninja-clang-coverage"
-                    fi
-                elif _is_linux; then
-                    preset="linux-ninja-clang-coverage"
-                fi
-                ;;
-            GNU)
-                preset="linux-ninja-gcc-coverage"
-                ;;
-            MSVC)
-                preset="windows-ninja-msvc-coverage"
-                ;;
-        esac
+        preset="$(coverage_default_configure_preset || true)"
     fi
 
     # Auto-detect test binary
     if [[ -z "$test_binary" ]]; then
-        case "$platform" in
-            Darwin|Linux)
-                test_binary="kano_git_tui_tests"
-                ;;
-            MINGW*|CYGWIN*|MSYS*|*nt*)
-                test_binary="kano_git_tui_tests.exe"
-                ;;
-        esac
+        test_binary="$(coverage_default_test_binary "$platform")"
     fi
 
-    local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
-    local binary_dir="out/bin/${preset}"
-    local binary_path="$cpp_root/$binary_dir/$test_binary"
+    local binary_path=""
+    binary_path="$(coverage_resolve_binary_path "$preset" "$test_binary" || true)"
 
     if [[ ! -f "$binary_path" ]]; then
         echo "[coverage_report] WARNING: Binary not found: $binary_path" >&2
