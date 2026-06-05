@@ -118,6 +118,48 @@ kano_cpp_infra_matrix_default_coverage_build_preset() {
   esac
 }
 
+kano_cpp_infra_matrix_default_release_configure_preset() {
+  local os_name arch
+  os_name="$(kano_cpp_infra_matrix_host_os)"
+  arch="$(kano_cpp_infra_matrix_arch)"
+  case "$os_name" in
+    win64)
+      kano_cpp_infra_matrix_first_existing_preset windows-ninja-msvc windows-ninja-msvc-arm64
+      ;;
+    mac)
+      if [[ "$arch" == "arm64" ]]; then
+        kano_cpp_infra_matrix_first_existing_preset macos-ninja-clang-arm64 macos-ninja-clang
+      else
+        kano_cpp_infra_matrix_first_existing_preset macos-ninja-clang-x64 macos-ninja-clang
+      fi
+      ;;
+    *)
+      kano_cpp_infra_matrix_first_existing_preset linux-ninja-gcc linux-ninja-clang
+      ;;
+  esac
+}
+
+kano_cpp_infra_matrix_default_release_build_preset() {
+  local os_name arch
+  os_name="$(kano_cpp_infra_matrix_host_os)"
+  arch="$(kano_cpp_infra_matrix_arch)"
+  case "$os_name" in
+    win64)
+      kano_cpp_infra_matrix_first_existing_preset windows-ninja-msvc-release windows-ninja-msvc-arm64-release
+      ;;
+    mac)
+      if [[ "$arch" == "arm64" ]]; then
+        kano_cpp_infra_matrix_first_existing_preset macos-ninja-clang-arm64-release macos-ninja-clang-release
+      else
+        kano_cpp_infra_matrix_first_existing_preset macos-ninja-clang-x64-release macos-ninja-clang-release
+      fi
+      ;;
+    *)
+      kano_cpp_infra_matrix_first_existing_preset linux-ninja-gcc-release linux-ninja-clang-release
+      ;;
+  esac
+}
+
 kano_cpp_infra_matrix_default_release_script() {
   local os_name arch
   os_name="$(kano_cpp_infra_matrix_host_os)"

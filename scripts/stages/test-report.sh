@@ -41,7 +41,10 @@ detect_preset_from_bin_dir() {
     return 1
 }
 
-DETECTED_PRESET="$(detect_preset_from_bin_dir "$CPP_ROOT" || true)"
+DETECTED_PRESET="${KANO_TEST_PRESET:-$(kano_cpp_infra_matrix_default_release_configure_preset || true)}"
+if [[ -z "$DETECTED_PRESET" ]]; then
+    DETECTED_PRESET="$(detect_preset_from_bin_dir "$CPP_ROOT" || true)"
+fi
 if [[ -z "$DETECTED_PRESET" ]]; then
     echo "[ERROR] Could not detect preset from $CPP_ROOT/out/bin/" >&2
     echo "[ERROR] No built binaries found. Run 'pixi run --manifest-path src/cpp/shared/infra/pixi.toml build' first." >&2
