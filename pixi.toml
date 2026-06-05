@@ -28,14 +28,17 @@ env-summary = "git --version && cmake --version && ninja --version"
 package-reports = "bash scripts/lib/package-reports-with-skill.sh"
 
 # CI/reporting contract:
-# - coverage-all is the canonical coverage lane when a job needs build + gather
-#   + report together.
+# - Jenkins jobs that must publish canonical test + coverage evidence should run
+#   `test-report` first, then `coverage-all`, then `gather-reports`.
+# - coverage-all owns the coverage lane only (`build -> gather -> report`).
 # - pgo-gather and pgo-rebuild are the canonical release PGO lanes.
+# - pgo-rebuild is the release optimization lane (`pgi-build -> pgo-gather ->
+#   pgo-build/use`) and is intentionally separate from coverage-all.
 # - pgo-gather-with-coverage is optional and only valid for supported unified
 #   coverage/PGO backends; it is not the default CI lane.
 # - build-coverage / test-coverage / coverage-report remain available as split
 #   stage seams, but coverage-report alone is render-only and does not replace
-#   coverage-all when a job must also build and gather evidence.
+#   coverage-all when a job must also build and gather coverage evidence.
 #
 # Linux CI host-routing:
 # - ci-linux-* tasks stay at top-level on purpose so a Linux branch can run on
