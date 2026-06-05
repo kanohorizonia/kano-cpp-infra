@@ -5,6 +5,33 @@ set -euo pipefail
 KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/report_skill_adapter.sh"
 
+kano_cpp_infra_report_resolve_path_fallback() {
+  local raw_path="${1:-}"
+  local base_dir="${2:-$(pwd -P)}"
+  local normalized
+
+  if [[ -z "$raw_path" ]]; then
+    return 0
+  fi
+
+  normalized="${raw_path//\\//}"
+  if command -v cygpath >/dev/null 2>&1 && [[ "$normalized" =~ ^[A-Za-z]:/ ]]; then
+    cygpath -u "$normalized"
+    return 0
+  fi
+  if [[ "$normalized" == /* ]]; then
+    printf '%s\n' "$normalized"
+    return 0
+  fi
+  if [[ "$normalized" == "." ]]; then
+    printf '%s\n' "$base_dir"
+    return 0
+  fi
+
+  normalized="${normalized#./}"
+  printf '%s/%s\n' "${base_dir%/}" "$normalized"
+}
+
 run_test_report() {
   : "${KANO_REPORT_SLUG:?KANO_REPORT_SLUG is required}"
   : "${KANO_TEST_COMMAND:?KANO_TEST_COMMAND is required}"
@@ -15,6 +42,14 @@ run_test_report() {
 
   # shellcheck disable=SC1090
   . "$KANO_CPP_TEST_SKILL_ROOT/src/shell/reports/common/report-env.sh"
+  # Keep report generation working when agents still have an older
+  # kano-cpp-test-skill checkout that does not export kct_report_resolve_path.
+  if ! declare -F kct_report_resolve_path >/dev/null 2>&1; then
+    echo "[WARN] report-env.sh did not export kct_report_resolve_path; using shared infra fallback." >&2
+    kct_report_resolve_path() {
+      kano_cpp_infra_report_resolve_path_fallback "$@"
+    }
+  fi
   export KANO_BDD_METADATA_DIR="$(kct_report_resolve_path "${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}")"
 
   rm -f "$KANO_TEST_XML"
