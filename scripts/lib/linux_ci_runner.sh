@@ -429,3 +429,18 @@ kano_cpp_linux_ci_run_export() {
     KANO_GIT_MASTER_ROOT="$KANO_CPP_LINUX_CI_REPO_ROOT" "$binary_path" "${args[@]}"
   )
 }
+
+kano_cpp_linux_ci_run_validate() {
+  local binary_path=""
+  local -a args=("$@")
+
+  binary_path="$(kano_cpp_linux_ci_require_release_binary)" || return 1
+  if [[ ${#args[@]} -eq 0 ]]; then
+    args=(repo-hygiene check --archive-safe)
+  fi
+
+  (
+    cd "$KANO_CPP_LINUX_CI_REPO_ROOT"
+    KANO_GIT_MASTER_ROOT="$KANO_CPP_LINUX_CI_REPO_ROOT" "$binary_path" "${args[@]}"
+  )
+}

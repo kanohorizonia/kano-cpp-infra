@@ -44,14 +44,16 @@ package-reports = "bash scripts/lib/package-reports-with-skill.sh"
 # - ci-linux-* tasks stay at top-level on purpose so a Linux branch can run on
 #   a native Linux node or any Docker-capable host.
 # - ci-linux-build / ci-linux-quick-test / ci-linux-test-report /
-#   ci-linux-coverage-all / ci-linux-export are the Jenkins-facing contract for
-#   Linux-on-docker branches. They do not replace the normal per-platform tasks.
+#   ci-linux-coverage-all / ci-linux-validate / ci-linux-export are the
+#   Jenkins-facing contract for Linux-on-docker branches. They do not replace
+#   the normal per-platform tasks.
 
 # Linux CI host-routed tasks (native on Linux, Docker otherwise)
 ci-linux-build = "bash scripts/platform/linux/ci-build.sh"
 ci-linux-quick-test = "bash scripts/platform/linux/ci-quick-test.sh"
 ci-linux-test-report = "bash scripts/platform/linux/ci-test-report.sh"
 ci-linux-coverage-all = "bash scripts/platform/linux/ci-coverage-all.sh"
+ci-linux-validate = "bash scripts/platform/linux/ci-validate.sh"
 ci-linux-export = "bash scripts/platform/linux/ci-export.sh"
 
 # Profiling matrices — runs a curated feature-combination matrix then renders report
