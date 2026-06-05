@@ -15,9 +15,11 @@ run_test_report() {
 
   # shellcheck disable=SC1090
   . "$KANO_CPP_TEST_SKILL_ROOT/src/shell/reports/common/report-env.sh"
+  export KANO_BDD_METADATA_DIR="$(kct_report_resolve_path "${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}")"
 
   rm -f "$KANO_TEST_XML"
   mkdir -p "$KANO_TEST_REPORT_DIR"
+  mkdir -p "$KANO_BDD_METADATA_DIR"
 
   (
     cd "$KANO_CPP_INFRA_CPP_ROOT"
@@ -27,7 +29,7 @@ run_test_report() {
 if [[ -f "$KANO_TEST_XML" ]]; then
     python "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/../tools/generate-bdd-metadata-from-junit.py" \
       "$KANO_TEST_XML" \
-      "${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}" \
+      "$KANO_BDD_METADATA_DIR" \
       "${KANO_TEST_BINARY_NAME:-kano_git_cli_tests}"
 else
     echo "[WARN] KANO_TEST_XML was not written by test command: $KANO_TEST_XML" >&2
