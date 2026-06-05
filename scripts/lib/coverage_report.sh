@@ -16,6 +16,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/docker_host.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Coverage directories
@@ -260,41 +262,64 @@ source "$repo_local_adapter"
 coverage_build_linux_via_docker() {
     local preset="${1:-linux-ninja-clang-coverage}"
     local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
+    local repo_root=""
     local container_name="kano-git-coverage-$$"
     local docker_image="ubuntu:24.04"
+    local input_mount=""
+    local linux_out_host=""
+    local linux_deps_host=""
+    local q_preset=""
+    local container_script=""
 
     echo "[coverage_build_linux_docker] Starting Docker container..."
 
-    # Start container in background, mount source read-only
-    docker run -d \
+    repo_root="$(cd "$cpp_root/../.." >/dev/null 2>&1 && pwd -P)"
+    input_mount="$(kano_cpp_docker_volume_arg "$repo_root" /input ro)" || return 1
+
+    # Start container in background, mount the repo read-only so the build can run
+    # in an internal writable workspace and stay shell-agnostic across hosts.
+    kano_cpp_docker_run run -d \
         --name "$container_name" \
-        -v "$cpp_root:/workspace/src/cpp:ro" \
-        -w /workspace/src/cpp \
+        --security-opt seccomp=unconfined \
+        -v "$input_mount" \
+        -w /workspace \
         "$docker_image" sleep infinity \
         2>&1 || {
         echo "[coverage_build_linux_docker] ERROR: Failed to start container" >&2
         return 1
     }
 
+    printf -v q_preset '%q' "$preset"
+    printf -v container_script '%s\n' \
+        "set -euo pipefail" \
+        "rm -rf /workspace/src/cpp" \
+        "mkdir -p /workspace/src" \
+        "cp -a /input/src/cpp /workspace/src/cpp" \
+        "cd /workspace/src/cpp" \
+        "apt-get update" \
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build clang llvm llvm-tools python3 git" \
+        "cmake --preset ${q_preset}" \
+        "cmake --build --preset ${q_preset}"
+
     # Install tools and build inside container
-    docker exec "$container_name" bash -c "
-        set -e
-        apt-get update
-        apt-get install -y cmake ninja-build clang llvm llvm-tools python3 git
-        cmake --preset ${preset}
-        cmake --build --preset ${preset}
-    " 2>&1 || {
+    kano_cpp_docker_run exec "$container_name" bash -lc "$container_script" 2>&1 || {
         echo "[coverage_build_linux_docker] ERROR: Docker build failed" >&2
-        docker rm -f "$container_name" 2>/dev/null
+        kano_cpp_docker_run rm -f "$container_name" >/dev/null 2>&1 || true
         return 1
     }
 
     # Copy build output back to host
-    docker cp "$container_name:/workspace/src/cpp/out" "$INF_COVERAGE_ROOT/linux-out" 2>&1
-    docker cp "$container_name:/workspace/src/cpp/_deps" "$INF_COVERAGE_ROOT/linux-deps" 2>&1 || true
+    mkdir -p "$INF_COVERAGE_ROOT"
+    rm -rf "$INF_COVERAGE_ROOT/linux-out" "$INF_COVERAGE_ROOT/linux-deps"
+    linux_out_host="$(kano_cpp_docker_host_path_for_cli "$INF_COVERAGE_ROOT")/linux-out"
+    kano_cpp_docker_run cp "$container_name:/workspace/src/cpp/out" "$linux_out_host" 2>&1
+    if kano_cpp_docker_run exec "$container_name" test -d /workspace/src/cpp/_deps >/dev/null 2>&1; then
+        linux_deps_host="$(kano_cpp_docker_host_path_for_cli "$INF_COVERAGE_ROOT")/linux-deps"
+        kano_cpp_docker_run cp "$container_name:/workspace/src/cpp/_deps" "$linux_deps_host" 2>&1 || true
+    fi
 
     # Cleanup
-    docker rm -f "$container_name" 2>/dev/null
+    kano_cpp_docker_run rm -f "$container_name" >/dev/null 2>&1 || true
 
     echo "[coverage_build_linux_docker] Done."
     echo "[coverage_build_linux_docker] Build output copied to: $INF_COVERAGE_ROOT/linux-out"

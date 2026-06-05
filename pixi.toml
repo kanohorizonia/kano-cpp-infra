@@ -27,6 +27,30 @@ env-summary = "git --version && cmake --version && ninja --version"
 # Package all reports (test + coverage) via kano-cpp-test-skill
 package-reports = "bash scripts/lib/package-reports-with-skill.sh"
 
+# CI/reporting contract:
+# - coverage-all is the canonical coverage lane when a job needs build + gather
+#   + report together.
+# - pgo-gather and pgo-rebuild are the canonical release PGO lanes.
+# - pgo-gather-with-coverage is optional and only valid for supported unified
+#   coverage/PGO backends; it is not the default CI lane.
+# - build-coverage / test-coverage / coverage-report remain available as split
+#   stage seams, but coverage-report alone is render-only and does not replace
+#   coverage-all when a job must also build and gather evidence.
+#
+# Linux CI host-routing:
+# - ci-linux-* tasks stay at top-level on purpose so a Linux branch can run on
+#   a native Linux node or any Docker-capable host.
+# - ci-linux-build / ci-linux-quick-test / ci-linux-test-report /
+#   ci-linux-coverage-all / ci-linux-export are the Jenkins-facing contract for
+#   Linux-on-docker branches. They do not replace the normal per-platform tasks.
+
+# Linux CI host-routed tasks (native on Linux, Docker otherwise)
+ci-linux-build = "bash scripts/platform/linux/ci-build.sh"
+ci-linux-quick-test = "bash scripts/platform/linux/ci-quick-test.sh"
+ci-linux-test-report = "bash scripts/platform/linux/ci-test-report.sh"
+ci-linux-coverage-all = "bash scripts/platform/linux/ci-coverage-all.sh"
+ci-linux-export = "bash scripts/platform/linux/ci-export.sh"
+
 # Profiling matrices — runs a curated feature-combination matrix then renders report
 # profile-default   : launcher=none vs ccache vs sccache vs fastbuild
 # profile-launchers : launcher comparisons only
@@ -69,7 +93,7 @@ pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pg
 pgo-gather-with-coverage = "bash scripts/workflows/pgo-gather-with-coverage.sh"
 profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 
-# Full coverage workflow: build + test + report
+# Canonical coverage workflow: build + gather + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
@@ -104,7 +128,7 @@ pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pg
 pgo-gather-with-coverage = "bash scripts/workflows/pgo-gather-with-coverage.sh"
 profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 
-# Full coverage workflow: build + test + report
+# Canonical coverage workflow: build + gather + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
@@ -139,7 +163,7 @@ pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pg
 pgo-gather-with-coverage = "bash scripts/workflows/pgo-gather-with-coverage.sh"
 profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 
-# Full coverage workflow: build + test + report
+# Canonical coverage workflow: build + gather + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
@@ -174,7 +198,7 @@ pgo-rebuild-quick = "KANO_CPP_INFRA_PGO_GATHER_QUICK=1 bash scripts/workflows/pg
 pgo-gather-with-coverage = "bash scripts/workflows/pgo-gather-with-coverage.sh"
 profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 
-# Full coverage workflow: build + test + report
+# Canonical coverage workflow: build + gather + report
 coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
