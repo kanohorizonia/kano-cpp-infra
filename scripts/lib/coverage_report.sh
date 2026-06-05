@@ -111,26 +111,54 @@ coverage_default_test_binary() {
     esac
 }
 
-coverage_resolve_binary_path() {
+coverage_binary_candidate_dirs() {
     local preset="${1:-}"
-    local test_binary="${2:-}"
     local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
 
     case "$preset" in
         linux-*)
             if [[ -d "$INF_COVERAGE_ROOT/linux-out/bin/${preset}" ]]; then
-                printf '%s\n' "$INF_COVERAGE_ROOT/linux-out/bin/${preset}/$test_binary"
-            else
-                printf '%s\n' "$cpp_root/out/bin/${preset}/$test_binary"
+                printf '%s\n' \
+                    "$INF_COVERAGE_ROOT/linux-out/bin/${preset}/debug" \
+                    "$INF_COVERAGE_ROOT/linux-out/bin/${preset}/release" \
+                    "$INF_COVERAGE_ROOT/linux-out/bin/${preset}"
             fi
+            printf '%s\n' \
+                "$cpp_root/out/bin/${preset}/debug" \
+                "$cpp_root/out/bin/${preset}/release" \
+                "$cpp_root/out/bin/${preset}"
             ;;
         macos-*|windows-*)
-            printf '%s\n' "$cpp_root/out/bin/${preset}/$test_binary"
+            printf '%s\n' \
+                "$cpp_root/out/bin/${preset}/debug" \
+                "$cpp_root/out/bin/${preset}/release" \
+                "$cpp_root/out/bin/${preset}"
             ;;
         *)
             return 1
             ;;
     esac
+}
+
+coverage_resolve_binary_path() {
+    local preset="${1:-}"
+    local test_binary="${2:-}"
+    local candidate_dir=""
+    local fallback_path=""
+
+    while IFS= read -r candidate_dir; do
+        [[ -n "$candidate_dir" ]] || continue
+        if [[ -z "$fallback_path" ]]; then
+            fallback_path="$candidate_dir/$test_binary"
+        fi
+        if [[ -f "$candidate_dir/$test_binary" ]]; then
+            printf '%s\n' "$candidate_dir/$test_binary"
+            return 0
+        fi
+    done < <(coverage_binary_candidate_dirs "$preset")
+
+    [[ -n "$fallback_path" ]] || return 1
+    printf '%s\n' "$fallback_path"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
