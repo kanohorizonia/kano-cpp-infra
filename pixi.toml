@@ -47,6 +47,9 @@ package-reports = "bash scripts/lib/package-reports-with-skill.sh"
 #   ci-linux-coverage-all / ci-linux-validate / ci-linux-export are the
 #   Jenkins-facing contract for Linux-on-docker branches. They do not replace
 #   the normal per-platform tasks.
+# - On Docker hosts the active Jenkins workspace is bind-mounted into the
+#   reusable Linux CI container, so build/test/export outputs land directly in
+#   the host workspace and archive normally without docker cp.
 
 # Linux CI host-routed tasks (native on Linux, Docker otherwise)
 ci-linux-build = "bash scripts/platform/linux/ci-build.sh"

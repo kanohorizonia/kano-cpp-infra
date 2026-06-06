@@ -43,6 +43,10 @@ kano_cpp_linux_ci_default_docker_image() {
   printf '%s\n' "${KANO_CPP_LINUX_DOCKER_IMAGE:-ubuntu:25.10}"
 }
 
+kano_cpp_linux_ci_container_revision() {
+  printf '%s\n' "${KANO_CPP_LINUX_CI_CONTAINER_REV:-1}"
+}
+
 kano_cpp_linux_ci_require_docker() {
   if command -v docker >/dev/null 2>&1; then
     return 0
@@ -71,9 +75,83 @@ kano_cpp_linux_ci_forward_env_args() {
     KANO_CPP_INFRA_COVERAGE_TOOL
   do
     if [[ -n "${!name+x}" ]]; then
-      out_ref+=(-e "$name")
+      out_ref+=(-e "$name=${!name}")
     fi
   done
+}
+
+kano_cpp_linux_ci_hash_text() {
+  local input="${1:-}"
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf '%s' "$input" | sha256sum | awk '{print substr($1, 1, 12)}'
+    return 0
+  fi
+  if command -v shasum >/dev/null 2>&1; then
+    printf '%s' "$input" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
+    return 0
+  fi
+  python3 - "$input" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import sys
+
+print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest()[:12])
+PY
+}
+
+kano_cpp_linux_ci_container_name() {
+  local image="${1:?image is required}"
+  local key=""
+
+  key="$(kano_cpp_linux_ci_hash_text "${KANO_CPP_LINUX_CI_REPO_ROOT}|${image}|$(kano_cpp_linux_ci_container_revision)")"
+  printf '%s\n' "kano-cpp-linux-ci-${key}"
+}
+
+kano_cpp_linux_ci_container_exists() {
+  local container_name="${1:?container name is required}"
+  kano_cpp_docker_run inspect "$container_name" >/dev/null 2>&1
+}
+
+kano_cpp_linux_ci_container_running() {
+  local container_name="${1:?container name is required}"
+  [[ "$(kano_cpp_docker_run inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null || true)" == "true" ]]
+}
+
+kano_cpp_linux_ci_ensure_container() {
+  local container_name="${1:?container name is required}"
+  local image="${2:?image is required}"
+  local mount_arg="${3:?mount argument is required}"
+
+  if kano_cpp_linux_ci_container_exists "$container_name"; then
+    return 0
+  fi
+
+  echo "[linux-ci-docker] creating reusable container: $container_name"
+  kano_cpp_docker_run create \
+    --name "$container_name" \
+    --security-opt seccomp=unconfined \
+    -v "$mount_arg" \
+    -w /work \
+    "$image" \
+    sleep infinity >/dev/null
+}
+
+kano_cpp_linux_ci_start_container() {
+  local container_name="${1:?container name is required}"
+  if kano_cpp_linux_ci_container_running "$container_name"; then
+    return 0
+  fi
+  echo "[linux-ci-docker] starting reusable container: $container_name"
+  kano_cpp_docker_run start "$container_name" >/dev/null
+}
+
+kano_cpp_linux_ci_stop_container() {
+  local container_name="${1:?container name is required}"
+  if ! kano_cpp_linux_ci_container_running "$container_name"; then
+    return 0
+  fi
+  kano_cpp_docker_run stop -t 1 "$container_name" >/dev/null
 }
 
 kano_cpp_linux_ci_exec_via_docker() {
@@ -82,19 +160,23 @@ kano_cpp_linux_ci_exec_via_docker() {
 
   local mount_arg=""
   local image=""
+  local container_name=""
   local -a env_args=()
 
   kano_cpp_linux_ci_require_docker || return 1
   mount_arg="$(kano_cpp_docker_volume_arg "$KANO_CPP_LINUX_CI_REPO_ROOT" /work)" || return 1
   image="$(kano_cpp_linux_ci_default_docker_image)"
+  container_name="$(kano_cpp_linux_ci_container_name "$image")"
   kano_cpp_linux_ci_forward_env_args env_args
 
-  kano_cpp_docker_run run --rm \
-    --security-opt seccomp=unconfined \
-    -v "$mount_arg" \
+  kano_cpp_linux_ci_ensure_container "$container_name" "$image" "$mount_arg" || return 1
+  kano_cpp_linux_ci_start_container "$container_name" || return 1
+  trap 'kano_cpp_linux_ci_stop_container "$container_name" >/dev/null 2>&1 || true' RETURN
+
+  kano_cpp_docker_run exec \
     "${env_args[@]}" \
     -w /work \
-    "$image" \
+    "$container_name" \
     bash -lc '
 set -euo pipefail
 need_install=0

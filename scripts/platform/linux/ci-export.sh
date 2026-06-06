@@ -8,6 +8,8 @@ REPO_SCRIPT="src/cpp/shared/infra/scripts/platform/linux/ci-export.sh"
 source "$SCRIPT_DIR/../../lib/linux_ci_runner.sh"
 
 if ! kano_cpp_linux_ci_is_linux_host; then
+  # Non-Linux hosts bind-mount the active Jenkins workspace into /work, so the
+  # Linux export archive is written directly back to the host workspace.
   kano_cpp_linux_ci_exec_via_docker "$REPO_SCRIPT" "$@"
   exit $?
 fi
