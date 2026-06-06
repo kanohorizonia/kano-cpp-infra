@@ -100,11 +100,29 @@ print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest()[:12])
 PY
 }
 
+kano_cpp_linux_ci_container_key_root() {
+  local canonical_root=""
+
+  if canonical_root="$(kano_cpp_docker_host_path_for_cli "$KANO_CPP_LINUX_CI_REPO_ROOT" 2>/dev/null)"; then
+    :
+  else
+    canonical_root="$(cd -- "$KANO_CPP_LINUX_CI_REPO_ROOT" >/dev/null 2>&1 && pwd -P)"
+  fi
+
+  canonical_root="${canonical_root//\\//}"
+  canonical_root="${canonical_root%/}"
+  if kano_cpp_docker_is_windows_shell; then
+    canonical_root="$(printf '%s' "$canonical_root" | tr '[:upper:]' '[:lower:]')"
+  fi
+
+  printf '%s\n' "$canonical_root"
+}
+
 kano_cpp_linux_ci_container_name() {
   local image="${1:?image is required}"
   local key=""
 
-  key="$(kano_cpp_linux_ci_hash_text "${KANO_CPP_LINUX_CI_REPO_ROOT}|${image}|$(kano_cpp_linux_ci_container_revision)")"
+  key="$(kano_cpp_linux_ci_hash_text "$(kano_cpp_linux_ci_container_key_root)|${image}|$(kano_cpp_linux_ci_container_revision)")"
   printf '%s\n' "kano-cpp-linux-ci-${key}"
 }
 
