@@ -119,6 +119,10 @@ _is_darwin() { [[ "$(detect_host_os)" == "Darwin" ]]; }
 _is_linux()  { [[ "$(detect_host_os)" == "Linux" ]]; }
 _is_windows(){ [[ "$(detect_host_os)" == MINGW* || "$(detect_host_os)" == CYGWIN* || "$(detect_host_os)" == MSYS* ]]; }
 
+coverage_cpp_root() {
+    printf '%s\n' "${INF_CPP_ROOT:-${KANO_CPP_INFRA_CPP_ROOT:-${KANO_CPP_ROOT:-$INF_CPP_ROOT_DEFAULT}}}"
+}
+
 coverage_default_configure_preset() {
     kano_cpp_infra_matrix_default_coverage_configure_preset
 }
@@ -285,13 +289,36 @@ coverage_build() {
     if [[ "$host_os" == "$target_platform" || "$target_platform" == "windows" ]]; then
         # Native build
         echo "[coverage_build] Native build (host=$host_os, target=$target_platform)"
-        (
-            if [[ -n "${INF_CPP_ROOT:-}" ]]; then
-                cd "$INF_CPP_ROOT"
+        if [[ "$target_platform" == "windows" && "$host_os" == "win64" ]]; then
+            local windows_build_preset=""
+            local windows_helper=""
+            local cpp_root=""
+
+            cpp_root="$(coverage_cpp_root)"
+            windows_build_preset="${KANO_CPP_INFRA_COVERAGE_BUILD_PRESET:-$(kano_cpp_infra_matrix_default_coverage_build_preset)}"
+            windows_helper="$SCRIPT_DIR/windows_preset_build.sh"
+            if [[ ! -f "$windows_helper" ]]; then
+                echo "[coverage_build] ERROR: Windows preset helper not found: $windows_helper" >&2
+                return 1
             fi
-            cmake --preset "$preset"
-            cmake --build --preset "${preset}"
-        )
+
+            export INF_CPP_ROOT="$cpp_root"
+            export KANO_CPP_INFRA_CPP_ROOT="$cpp_root"
+            export KANO_CPP_ROOT="$cpp_root"
+            # shellcheck disable=SC1090
+            source "$windows_helper"
+            kano_windows_run_preset "$preset" "$windows_build_preset" "${KANO_CPP_INFRA_VCVARS_ARCH:-x64}"
+        else
+            (
+                local cpp_root=""
+                cpp_root="$(coverage_cpp_root)"
+                if [[ -n "$cpp_root" ]]; then
+                    cd "$cpp_root"
+                fi
+                cmake --preset "$preset"
+                cmake --build --preset "${preset}"
+            )
+        fi
     elif [[ "$target_platform" == "macos" ]]; then
         # macOS build from non-macOS host → use repo-local adapter when available.
         echo "[coverage_build] Remote macOS build via remote host adapter"
