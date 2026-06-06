@@ -193,6 +193,7 @@ kano_cpp_linux_ci_exec_via_docker() {
 
   kano_cpp_docker_run exec \
     "${env_args[@]}" \
+    -e KANO_CPP_LINUX_CI_IN_DOCKER=1 \
     -w /work \
     "$container_name" \
     bash -lc '
@@ -515,19 +516,133 @@ kano_cpp_linux_ci_require_release_binary() {
   printf '%s\n' "$binary_path"
 }
 
+kano_cpp_linux_ci_export_has_output_arg() {
+  local arg=""
+  for arg in "$@"; do
+    if [[ "$arg" == "--output" || "$arg" == --output=* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+kano_cpp_linux_ci_export_output_dir() {
+  printf '%s\n' "$KANO_CPP_LINUX_CI_REPO_ROOT/.kano/tmp/git/export"
+}
+
+kano_cpp_linux_ci_sync_export_output() {
+  local staged_output_dir="${1:?staged output dir is required}"
+  local target_output_dir="${2:?target output dir is required}"
+
+  mkdir -p "$target_output_dir"
+  if [[ -d "$staged_output_dir" ]]; then
+    cp -a "$staged_output_dir/." "$target_output_dir/"
+  fi
+}
+
+kano_cpp_linux_ci_rewrite_export_manifests() {
+  local staged_output_dir="${1:?staged output dir is required}"
+  local target_output_dir="${2:?target output dir is required}"
+  local repo_tmp_dir="${KANO_CPP_LINUX_CI_REPO_ROOT}/.kano/tmp"
+
+  python3 - "$staged_output_dir" "$target_output_dir" "$repo_tmp_dir" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+staged_output = Path(sys.argv[1])
+target_output = Path(sys.argv[2])
+repo_tmp = Path(sys.argv[3])
+
+if not repo_tmp.exists():
+    raise SystemExit(0)
+
+manifest_names = {p.name for p in staged_output.glob("*.export-manifest.json")}
+if not manifest_names:
+    raise SystemExit(0)
+
+for manifest_name in manifest_names:
+    candidates = [
+        target_output / manifest_name,
+        repo_tmp / manifest_name,
+    ]
+    for manifest_path in candidates:
+        if not manifest_path.is_file():
+            continue
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        archive_file = data.get("archiveFile")
+        if not isinstance(archive_file, str):
+            continue
+        archive_name = Path(archive_file).name
+        rewritten_archive = (target_output / archive_name).as_posix()
+        data["archiveFile"] = rewritten_archive
+        if isinstance(data.get("path"), str):
+            data["path"] = rewritten_archive
+        archives = data.get("archives")
+        if isinstance(archives, list):
+            for archive_entry in archives:
+                if not isinstance(archive_entry, dict):
+                    continue
+                entry_source = archive_entry.get("archiveFile") or archive_entry.get("path")
+                if not isinstance(entry_source, str):
+                    continue
+                entry_name = Path(entry_source).name
+                rewritten_entry = (target_output / entry_name).as_posix()
+                archive_entry["archiveFile"] = rewritten_entry
+                archive_entry["path"] = rewritten_entry
+        manifest_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
 kano_cpp_linux_ci_run_export() {
   local binary_path=""
   local -a args=("$@")
+  local stage_output_dir=""
+  local target_output_dir=""
+  local exit_code=0
 
   binary_path="$(kano_cpp_linux_ci_require_release_binary)" || return 1
   if [[ ${#args[@]} -eq 0 ]]; then
     args=(export --single --validate-release-archive)
   fi
 
+  # Docker-hosted Linux exports validate badly from large Windows bind mounts.
+  # Stage the archive in container-local tmp storage, then sync artifacts back.
+  if [[ "${KANO_CPP_LINUX_CI_IN_DOCKER:-0}" == "1" ]] && ! kano_cpp_linux_ci_export_has_output_arg "${args[@]}"; then
+    target_output_dir="$(kano_cpp_linux_ci_export_output_dir)"
+    stage_output_dir="$(mktemp -d "${TMPDIR:-/tmp}/kano-cpp-linux-export.XXXXXX")" || return 1
+    args+=(--output "$stage_output_dir")
+    echo "[linux-ci-docker] staging export in container tmp dir: $stage_output_dir"
+  fi
+
+  set +e
   (
     cd "$KANO_CPP_LINUX_CI_REPO_ROOT"
     KANO_GIT_MASTER_ROOT="$KANO_CPP_LINUX_CI_REPO_ROOT" "$binary_path" "${args[@]}"
   )
+  exit_code=$?
+  set -e
+
+  if [[ -n "$stage_output_dir" ]]; then
+    echo "[linux-ci-docker] syncing staged export artifacts -> $target_output_dir"
+    if ! kano_cpp_linux_ci_sync_export_output "$stage_output_dir" "$target_output_dir"; then
+      echo "Failed to sync staged export artifacts back to workspace." >&2
+      [[ $exit_code -eq 0 ]] && exit_code=1
+    else
+      kano_cpp_linux_ci_rewrite_export_manifests "$stage_output_dir" "$target_output_dir" || {
+        echo "Failed to rewrite staged export manifests for workspace paths." >&2
+        [[ $exit_code -eq 0 ]] && exit_code=1
+      }
+    fi
+    rm -rf "$stage_output_dir"
+  fi
+
+  return "$exit_code"
 }
 
 kano_cpp_linux_ci_run_validate() {
