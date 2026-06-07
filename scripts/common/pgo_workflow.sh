@@ -47,6 +47,38 @@ _is_unix() {
     [[ "$(uname -s 2>/dev/null || echo "unknown")" != "CYGWIN"* && "$(uname -s 2>/dev/null || echo "unknown")" != MINGW* && "$(uname -s 2>/dev/null || echo "unknown")" != MSYS* ]]
 }
 
+resolve_llvm_profdata() {
+    local candidate
+    for candidate in \
+        "${KANO_LLVM_PROFDATA:-}" \
+        "${LLVM_PROFDATA:-}" \
+        llvm-profdata \
+        llvm-profdata-21 \
+        llvm-profdata-20 \
+        llvm-profdata-19 \
+        llvm-profdata-18 \
+        llvm-profdata-17 \
+        llvm-profdata-16; do
+        [[ -n "$candidate" ]] || continue
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+        if command -v "$candidate" >/dev/null 2>&1; then
+            command -v "$candidate"
+            return 0
+        fi
+    done
+    if command -v xcrun >/dev/null 2>&1; then
+        candidate="$(xcrun -f llvm-profdata 2>/dev/null || true)"
+        if [[ -n "$candidate" && -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    fi
+    return 1
+}
+
 # Ensure directories exist
 pgo_ensure_dirs() {
     mkdir -p "$INF_PGO_COLLECT_DIR"
@@ -151,8 +183,8 @@ pgo_merge() {
     pgo_ensure_dirs
 
     if [[ "$compiler_id" == "Clang" ]]; then
-        # Clang: use llvm-profdata merge
-        if ! command -v llvm-profdata >/dev/null 2>&1; then
+        local llvm_profdata
+        if ! llvm_profdata="$(resolve_llvm_profdata)"; then
             echo "[pgo_merge] ERROR: llvm-profdata not found. Install LLVM/Clang tools." >&2
             return 1
         fi
@@ -169,9 +201,9 @@ pgo_merge() {
         fi
 
         echo "[pgo_merge] Found ${#profraw_files[@]} .profraw files"
-        echo "[pgo_merge] Merging with llvm-profdata..."
+        echo "[pgo_merge] Merging with llvm-profdata: $llvm_profdata"
 
-        llvm-profdata merge \
+        "$llvm_profdata" merge \
             -o "$output_file" \
             "${profraw_files[@]}" \
             2>&1 || {

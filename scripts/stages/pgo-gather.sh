@@ -437,9 +437,54 @@ _has_reportgenerator() {
   command -v reportgenerator >/dev/null 2>&1
 }
 
+_resolve_llvm_tool() {
+  local tool="$1"
+  local env_var="$2"
+  local fallback_env_var="$3"
+  local explicit="${!env_var:-}"
+  local fallback="${!fallback_env_var:-}"
+  local candidate
+  for candidate in \
+    "$explicit" \
+    "$fallback" \
+    "$tool" \
+    "$tool-21" \
+    "$tool-20" \
+    "$tool-19" \
+    "$tool-18" \
+    "$tool-17" \
+    "$tool-16"; do
+    [[ -n "$candidate" ]] || continue
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  if command -v xcrun >/dev/null 2>&1; then
+    candidate="$(xcrun -f "$tool" 2>/dev/null || true)"
+    if [[ -n "$candidate" && -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+_resolve_llvm_profdata() {
+  _resolve_llvm_tool llvm-profdata KANO_LLVM_PROFDATA LLVM_PROFDATA
+}
+
+_resolve_llvm_cov() {
+  _resolve_llvm_tool llvm-cov KANO_LLVM_COV LLVM_COV
+}
+
 # Check if LLVM coverage tools are available (llvm-profdata + llvm-cov)
 _has_llvm_coverage() {
-  command -v llvm-profdata >/dev/null 2>&1 && command -v llvm-cov >/dev/null 2>&1
+  _resolve_llvm_profdata >/dev/null 2>&1 && _resolve_llvm_cov >/dev/null 2>&1
 }
 
 # Convert a POSIX path (Git-Bash style /c/...) to a Windows native path (C:\...)
@@ -583,6 +628,10 @@ generate_llvm_coverage_html() {
     echo "[pgo-gather] skipping LLVM coverage HTML: llvm-profdata/llvm-cov not available" >&2
     return 0
   fi
+  local llvm_profdata
+  local llvm_cov
+  llvm_profdata="$(_resolve_llvm_profdata)"
+  llvm_cov="$(_resolve_llvm_cov)"
 
   local -a profraw_files=()
   while IFS= read -r -d '' f; do
@@ -596,7 +645,7 @@ generate_llvm_coverage_html() {
 
   local merged_profdata="$profraw_dir/merged.profdata"
   echo "[pgo-gather] merging ${#profraw_files[@]} .profraw file(s) ..." >&2
-  llvm-profdata merge -sparse "${profraw_files[@]}" -o "$merged_profdata" || {
+  "$llvm_profdata" merge -sparse "${profraw_files[@]}" -o "$merged_profdata" || {
     echo "[pgo-gather] warning: llvm-profdata merge failed; skipping coverage HTML" >&2
     return 0
   }
@@ -621,10 +670,10 @@ generate_llvm_coverage_html() {
   done
 
   mkdir -p "$html_dir"
-  echo "[pgo-gather] generating LLVM coverage HTML ..." >&2
-  llvm-cov show "${show_args[@]}" >/dev/null 2>&1 || {
+  echo "[pgo-gather] generating LLVM coverage HTML with $llvm_cov ..." >&2
+  "$llvm_cov" show "${show_args[@]}" >/dev/null 2>&1 || {
     echo "[pgo-gather] warning: llvm-cov show failed; trying without ignore regex" >&2
-    llvm-cov show "$primary_bin" -instr-profile="$merged_profdata" -format=html -output-dir="$html_dir" >/dev/null 2>&1 || {
+    "$llvm_cov" show "$primary_bin" -instr-profile="$merged_profdata" -format=html -output-dir="$html_dir" >/dev/null 2>&1 || {
       echo "[pgo-gather] warning: llvm-cov show failed entirely" >&2
       return 0
     }
@@ -642,7 +691,7 @@ generate_llvm_coverage_html() {
   for b in "${binaries[@]:1}"; do
     [[ -f "$b" ]] && export_args+=(--object="$b")
   done
-  if llvm-cov export "${export_args[@]}" > "$llvm_json" 2>/dev/null; then
+  if "$llvm_cov" export "${export_args[@]}" > "$llvm_json" 2>/dev/null; then
     "$PYTHON_BIN" "$SCRIPT_DIR/../lib/llvm_json_to_cobertura.py" "$llvm_json" "$CPP_ROOT" "$cobertura_out" 2>/dev/null || true
   fi
 }

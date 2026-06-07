@@ -108,6 +108,51 @@ detect_coverage_env() {
     echo "$platform:$compiler_id:$llvm_cov_path"
 }
 
+coverage_resolve_llvm_tool() {
+    local tool="$1"
+    local env_var="$2"
+    local fallback_env_var="$3"
+    local explicit="${!env_var:-}"
+    local fallback="${!fallback_env_var:-}"
+    local candidate
+    for candidate in \
+        "$explicit" \
+        "$fallback" \
+        "$tool" \
+        "$tool-21" \
+        "$tool-20" \
+        "$tool-19" \
+        "$tool-18" \
+        "$tool-17" \
+        "$tool-16"; do
+        [[ -n "$candidate" ]] || continue
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+        if command -v "$candidate" >/dev/null 2>&1; then
+            command -v "$candidate"
+            return 0
+        fi
+    done
+    if command -v xcrun >/dev/null 2>&1; then
+        candidate="$(xcrun -f "$tool" 2>/dev/null || true)"
+        if [[ -n "$candidate" && -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+coverage_resolve_llvm_profdata() {
+    coverage_resolve_llvm_tool llvm-profdata KANO_LLVM_PROFDATA LLVM_PROFDATA
+}
+
+coverage_resolve_llvm_cov() {
+    coverage_resolve_llvm_tool llvm-cov KANO_LLVM_COV LLVM_COV
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Utility: Detect host OS (different from target platform for cross-compile)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -500,18 +545,10 @@ coverage_merge() {
     coverage_ensure_dirs
 
     if [[ "$compiler_id" == "Clang" ]]; then
-        if [[ -z "$llvm_cov_path" ]] && ! command -v llvm-profdata >/dev/null 2>&1; then
+        local llvm_profdata
+        if ! llvm_profdata="$(coverage_resolve_llvm_profdata)"; then
             echo "[coverage_merge] ERROR: llvm-profdata not found. Install LLVM/Clang tools." >&2
             return 1
-        fi
-
-        local llvm_profdata="${llvm_cov_path:+$llvm_cov_path/}llvm-profdata"
-        if [[ ! -x "$llvm_profdata" ]] && ! command -v llvm-profdata >/dev/null 2>&1; then
-            echo "[coverage_merge] ERROR: llvm-profdata not executable: $llvm_profdata" >&2
-            return 1
-        fi
-        if [[ ! -x "$llvm_profdata" ]]; then
-            llvm_profdata="$(command -v llvm-profdata)"
         fi
 
         local -a profraw_files=()
@@ -595,20 +632,11 @@ coverage_report() {
     fi
 
     if [[ "$compiler_id" == "Clang" ]]; then
-        if [[ -z "$llvm_cov_path" ]] && ! command -v llvm-cov >/dev/null 2>&1; then
+        local llvm_cov
+        if ! llvm_cov="$(coverage_resolve_llvm_cov)"; then
             echo "[coverage_report] ERROR: llvm-cov not found." >&2
             coverage_write_status "TOOL_FAILED" "LLVM_COV_NOT_FOUND" "llvm-cov"
             return 1
-        fi
-
-        local llvm_cov="${llvm_cov_path:+$llvm_cov_path/}llvm-cov"
-        if [[ ! -x "$llvm_cov" ]] && ! command -v llvm-cov >/dev/null 2>&1; then
-            echo "[coverage_report] ERROR: llvm-cov not executable: $llvm_cov" >&2
-            coverage_write_status "TOOL_FAILED" "LLVM_COV_NOT_EXECUTABLE" "$llvm_cov"
-            return 1
-        fi
-        if [[ ! -x "$llvm_cov" ]]; then
-            llvm_cov="$(command -v llvm-cov)"
         fi
 
         # HTML report
