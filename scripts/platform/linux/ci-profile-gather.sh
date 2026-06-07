@@ -11,6 +11,8 @@ source "$SCRIPT_DIR/../../lib/linux_ci_runner.sh"
 # Keep the CI training lane bounded by default; callers can set this to 0 for
 # an explicit full gather run.
 export KANO_CPP_INFRA_PGO_GATHER_QUICK="${KANO_CPP_INFRA_PGO_GATHER_QUICK:-1}"
+export KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-linux-ninja-clang-pgo-collect}"
+export KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-linux-ninja-clang-pgo-collect-debug}"
 
 if ! kano_cpp_linux_ci_is_linux_host; then
   kano_cpp_linux_ci_exec_via_docker "$REPO_SCRIPT" "$@"

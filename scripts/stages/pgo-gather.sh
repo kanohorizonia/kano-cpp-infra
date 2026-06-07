@@ -626,6 +626,7 @@ generate_llvm_coverage_html() {
 
   if ! _has_llvm_coverage; then
     echo "[pgo-gather] skipping LLVM coverage HTML: llvm-profdata/llvm-cov not available" >&2
+    write_coverage_status_html "$html_dir" "Coverage tooling unavailable" "llvm-profdata or llvm-cov was not found on this agent." "$profraw_dir"
     return 0
   fi
   local llvm_profdata
@@ -640,6 +641,7 @@ generate_llvm_coverage_html() {
 
   if [[ ${#profraw_files[@]} -eq 0 ]]; then
     echo "[pgo-gather] no .profraw files found; skipping LLVM coverage HTML" >&2
+    write_coverage_status_html "$html_dir" "Coverage data unavailable" "No LLVM .profraw files were produced by the profile-gather run." "$profraw_dir"
     return 0
   fi
 
@@ -647,6 +649,7 @@ generate_llvm_coverage_html() {
   echo "[pgo-gather] merging ${#profraw_files[@]} .profraw file(s) ..." >&2
   "$llvm_profdata" merge -sparse "${profraw_files[@]}" -o "$merged_profdata" || {
     echo "[pgo-gather] warning: llvm-profdata merge failed; skipping coverage HTML" >&2
+    write_coverage_status_html "$html_dir" "Coverage merge failed" "llvm-profdata could not merge the collected .profraw files." "$profraw_dir"
     return 0
   }
 
@@ -654,6 +657,7 @@ generate_llvm_coverage_html() {
   local primary_bin="${binaries[0]:-}"
   if [[ -z "$primary_bin" ]]; then
     echo "[pgo-gather] warning: no binaries for llvm-cov; skipping HTML" >&2
+    write_coverage_status_html "$html_dir" "Coverage binaries unavailable" "No test binaries were available for llvm-cov HTML rendering." "$profraw_dir"
     return 0
   fi
 
@@ -675,6 +679,7 @@ generate_llvm_coverage_html() {
     echo "[pgo-gather] warning: llvm-cov show failed; trying without ignore regex" >&2
     "$llvm_cov" show "$primary_bin" -instr-profile="$merged_profdata" -format=html -output-dir="$html_dir" >/dev/null 2>&1 || {
       echo "[pgo-gather] warning: llvm-cov show failed entirely" >&2
+      write_coverage_status_html "$html_dir" "Coverage render failed" "llvm-cov could not render the collected profile data." "$profraw_dir"
       return 0
     }
   }
@@ -696,15 +701,67 @@ generate_llvm_coverage_html() {
   fi
 }
 
+write_coverage_status_html() {
+  local html_dir="$1"
+  local title="$2"
+  local detail="$3"
+  local raw_dir="${4:-}"
+
+  mkdir -p "$html_dir"
+  "$PYTHON_BIN" - "$html_dir/index.html" "$title" "$detail" "$raw_dir" <<'PY'
+import html
+import sys
+from pathlib import Path
+
+out = Path(sys.argv[1])
+title = sys.argv[2]
+detail = sys.argv[3]
+raw_dir = Path(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None
+files = []
+if raw_dir and raw_dir.exists():
+    for pattern in ("*.cobertura.xml", "*.profraw", "*.json", "*.log", "*.txt"):
+        files.extend(sorted(raw_dir.glob(pattern)))
+
+def esc(value):
+    return html.escape(str(value), quote=True)
+
+items = "\n".join(f"<li><code>{esc(path.name)}</code></li>" for path in files[:80])
+if not items:
+    items = "<li>No raw coverage files were found.</li>"
+
+out.write_text(f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{esc(title)}</title>
+  <style>
+    body {{ font-family: Segoe UI, Arial, sans-serif; margin: 2rem; line-height: 1.5; color: #24292f; }}
+    h1 {{ margin: 0 0 0.75rem; font-size: 1.8rem; }}
+    .panel {{ border: 1px solid #d0d7de; border-radius: 8px; padding: 1rem 1.25rem; background: #f6f8fa; max-width: 920px; }}
+    code {{ background: #eef2f6; padding: 0.1rem 0.3rem; border-radius: 4px; }}
+    ul {{ margin-bottom: 0; }}
+  </style>
+</head>
+<body>
+  <h1>{esc(title)}</h1>
+  <div class="panel">
+    <p>{esc(detail)}</p>
+    <p>Raw directory: <code>{esc(raw_dir or "")}</code></p>
+    <h2>Raw Inputs</h2>
+    <ul>{items}</ul>
+  </div>
+</body>
+</html>
+""", encoding="utf-8")
+PY
+  echo "[pgo-gather] coverage status HTML: $html_dir/index.html" >&2
+}
+
 # Generate HTML coverage report from Cobertura XML files (Windows: microsoft or opencppcoverage).
 generate_coverage_html() {
   local raw_dir="$1"
   local html_dir="$2"
-
-  if ! _has_reportgenerator; then
-    echo "[pgo-gather] skipping coverage HTML: reportgenerator not available" >&2
-    return 0
-  fi
 
   local -a xml_files=()
   while IFS= read -r -d '' f; do
@@ -712,8 +769,9 @@ generate_coverage_html() {
   done < <(find "$raw_dir" -name "*.cobertura.xml" -type f -print0 2>/dev/null || true)
 
   if [[ ${#xml_files[@]} -eq 0 ]]; then
-    echo "[pgo-gather] no .cobertura.xml files found; skipping coverage HTML" >&2
-    return 1
+    echo "[pgo-gather] no .cobertura.xml files found; publishing coverage status HTML" >&2
+    write_coverage_status_html "$html_dir" "Coverage data unavailable" "No Cobertura XML reports were produced by the profile-gather run." "$raw_dir"
+    return 0
   fi
 
   # Keep only non-empty Cobertura files (lines-valid > 0).
@@ -739,37 +797,9 @@ PY
 
   if [[ ${#nonempty_xml_files[@]} -eq 0 ]]; then
     dump_cobertura_debug_summary "$raw_dir"
-    if [[ "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
-      echo "[pgo-gather] quick mode: all Cobertura XML reports are empty; publishing placeholder coverage HTML for flow validation" >&2
-      mkdir -p "$html_dir"
-      cat > "$html_dir/index.html" <<'HTML'
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Coverage Report (Quick Mode Placeholder)</title>
-  <style>
-    body { font-family: Segoe UI, sans-serif; margin: 2rem; line-height: 1.5; }
-    .box { border: 1px solid #d0d7de; border-radius: 8px; padding: 1rem 1.25rem; background: #f6f8fa; }
-    h1 { margin-top: 0; }
-    code { background: #eef2f6; padding: 0.1rem 0.3rem; border-radius: 4px; }
-  </style>
-</head>
-<body>
-  <h1>Coverage Report Placeholder</h1>
-  <div class="box">
-    <p>This report was generated in quick mode for pipeline flow validation.</p>
-    <p>No non-empty Cobertura XML input was produced, so real coverage metrics are not available.</p>
-    <p>Run full gather mode (without <code>KANO_CPP_INFRA_PGO_GATHER_QUICK=1</code>) to publish real coverage.</p>
-  </div>
-</body>
-</html>
-HTML
-      return 0
-    fi
-    echo "[pgo-gather] all Cobertura XML reports are empty; refusing to publish empty coverage HTML" >&2
-    return 1
+    echo "[pgo-gather] all Cobertura XML reports are empty; publishing coverage status HTML" >&2
+    write_coverage_status_html "$html_dir" "Coverage data empty" "Cobertura XML was produced, but all reports had zero valid lines." "$raw_dir"
+    return 0
   fi
 
   local skill_root best_xml
@@ -802,6 +832,12 @@ PY
       fi
       echo "[pgo-gather] warning: skill coverage renderer failed; falling back to reportgenerator" >&2
     fi
+  fi
+
+  if ! _has_reportgenerator; then
+    echo "[pgo-gather] reportgenerator not available; publishing coverage status HTML" >&2
+    write_coverage_status_html "$html_dir" "Coverage renderer unavailable" "Non-empty Cobertura XML exists, but neither the skill coverage renderer nor reportgenerator could render it." "$raw_dir"
+    return 0
   fi
 
   echo "[pgo-gather] generating coverage HTML from ${#nonempty_xml_files[@]} non-empty Cobertura report(s)" >&2
@@ -894,6 +930,7 @@ run_collect_case() {
   echo "[pgo-gather] running ${in_progress:+$in_progress }$in_label (${in_filter:-all-tests})" >&2
   pgo_verbose_log "${in_progress:+$in_progress }log: $log_path"
   if _run_with_coverage "$cov_filter" "$in_candidate" "${args[@]}" >"$log_path" 2>&1; then
+    sync_llvm_profile_for_pgo_merge "$cov_filter"
     if [[ -f "$report_tmp" ]]; then
       mv -f "$report_tmp" "$report_path"
       echo "[pgo-gather] pass $in_label" >&2
@@ -931,6 +968,7 @@ EOF
   echo "[pgo-gather] warning: $in_label failed for filter '${in_filter:-all-tests}', retry full binary" >&2
   rm -f "$report_tmp"
   if _run_with_coverage "$cov_fallback" "$in_candidate" --order lex --rng-seed 1337 "${reporter_args_tmp[@]}" >"$log_path" 2>&1; then
+    sync_llvm_profile_for_pgo_merge "$cov_fallback"
     if [[ -f "$report_tmp" ]]; then
       mv -f "$report_tmp" "$report_path"
       echo "[pgo-gather] pass $in_label (fallback all-tests)" >&2
@@ -995,6 +1033,16 @@ EOF
 
   echo "[pgo-gather] warning: $in_label fallback failed; see $log_path" >&2
   return 1
+}
+
+sync_llvm_profile_for_pgo_merge() {
+  local profile_path="${1:-}"
+  [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "llvm" ]] || return 0
+  [[ -n "$profile_path" && -f "$profile_path" ]] || return 0
+  [[ -n "${INF_PGO_COLLECT_DIR:-}" ]] || return 0
+
+  mkdir -p "$INF_PGO_COLLECT_DIR"
+  cp -f "$profile_path" "$INF_PGO_COLLECT_DIR/$(basename "$profile_path")"
 }
 
 _render_junit_html_reports_fallback() {
