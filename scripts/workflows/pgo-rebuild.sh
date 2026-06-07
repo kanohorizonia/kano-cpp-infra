@@ -41,7 +41,11 @@ import os
 import sys
 
 mode = sys.argv[1]
-raw = (os.environ.get("KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON") or "").strip()
+raw = (
+    os.environ.get("KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON")
+    or os.environ.get("INF_CMAKE_CACHE_ARGS_JSON")
+    or ""
+).strip()
 data = {}
 if raw:
     data = json.loads(raw)
@@ -60,6 +64,24 @@ if mode == "use":
     )
 print(json.dumps(data))
 PY
+}
+
+restore_cmake_cache_args_json() {
+  local had_kano_cache_args="$1"
+  local original_kano_cache_args="$2"
+  local had_inf_cache_args="$3"
+  local original_inf_cache_args="$4"
+
+  if [[ "$had_kano_cache_args" -eq 1 ]]; then
+    export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_kano_cache_args"
+  else
+    unset KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON || true
+  fi
+  if [[ "$had_inf_cache_args" -eq 1 ]]; then
+    export INF_CMAKE_CACHE_ARGS_JSON="$original_inf_cache_args"
+  else
+    unset INF_CMAKE_CACHE_ARGS_JSON || true
+  fi
 }
 
 cmake_preset_exists() {
@@ -240,11 +262,20 @@ remove_build_tree_for_reconfigure() {
 run_collect_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-$(default_collect_build_preset)}"
-  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_kano_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_inf_cache_args="${INF_CMAKE_CACHE_ARGS_JSON:-}"
   local original_build_targets="${KANO_CPP_INFRA_BUILD_TARGETS:-}"
   local original_collect_coverage_mapping="${KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING:-}"
+  local had_kano_cache_args=0
+  local had_inf_cache_args=0
   local had_collect_coverage_mapping=0
   local collect_build_targets="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_TARGETS:-}"
+  if [[ "${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON+x}" == "x" ]]; then
+    had_kano_cache_args=1
+  fi
+  if [[ "${INF_CMAKE_CACHE_ARGS_JSON+x}" == "x" ]]; then
+    had_inf_cache_args=1
+  fi
   if [[ "${KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING+x}" == "x" ]]; then
     had_collect_coverage_mapping=1
   fi
@@ -270,7 +301,10 @@ run_collect_build() {
     export KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING="OFF"
     echo "[pgo] macOS collect coverage mapping: OFF" >&2
   fi
-  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode collect)"
+  local collect_cache_args
+  collect_cache_args="$(json_with_pgo_mode collect)"
+  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$collect_cache_args"
+  export INF_CMAKE_CACHE_ARGS_JSON="$collect_cache_args"
   if [[ -z "$collect_build_targets" && "$(uname -s 2>/dev/null || true)" == "Darwin" && "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
     collect_build_targets="kano_git_cli_tests"
   fi
@@ -296,7 +330,7 @@ run_collect_build() {
     kano_cpp_run_unix_preset "$configure_preset" "$build_preset"
   fi
 
-  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
+  restore_cmake_cache_args_json "$had_kano_cache_args" "$original_kano_cache_args" "$had_inf_cache_args" "$original_inf_cache_args"
   if [[ -n "$original_build_targets" ]]; then
     export KANO_CPP_INFRA_BUILD_TARGETS="$original_build_targets"
   else
@@ -312,7 +346,16 @@ run_collect_build() {
 run_use_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET:-$(default_use_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_USE_BUILD_PRESET:-$(default_use_build_preset)}"
-  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_kano_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_inf_cache_args="${INF_CMAKE_CACHE_ARGS_JSON:-}"
+  local had_kano_cache_args=0
+  local had_inf_cache_args=0
+  if [[ "${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON+x}" == "x" ]]; then
+    had_kano_cache_args=1
+  fi
+  if [[ "${INF_CMAKE_CACHE_ARGS_JSON+x}" == "x" ]]; then
+    had_inf_cache_args=1
+  fi
 
   prepare_pgo_profile_paths
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
@@ -320,7 +363,10 @@ run_use_build() {
   if is_windows_host; then
     export KANO_CPP_INFRA_PGO_COMPILER_ID="MSVC"
   fi
-  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode use)"
+  local use_cache_args
+  use_cache_args="$(json_with_pgo_mode use)"
+  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$use_cache_args"
+  export INF_CMAKE_CACHE_ARGS_JSON="$use_cache_args"
 
   if is_windows_host; then
     # shellcheck disable=SC1090
@@ -332,7 +378,7 @@ run_use_build() {
     kano_cpp_run_unix_preset "$configure_preset" "$build_preset"
   fi
 
-  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
+  restore_cmake_cache_args_json "$had_kano_cache_args" "$original_kano_cache_args" "$had_inf_cache_args" "$original_inf_cache_args"
 }
 
 prepare_pgo_collect_environment() {
