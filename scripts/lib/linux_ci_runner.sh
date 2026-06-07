@@ -31,6 +31,39 @@ kano_cpp_linux_ci_release_build_preset() {
   printf '%s\n' "${KANO_CPP_LINUX_RELEASE_BUILD_PRESET:-linux-ninja-gcc-release}"
 }
 
+kano_cpp_linux_ci_fetchcontent_deps_root() {
+  local release_configure_preset=""
+  release_configure_preset="$(kano_cpp_linux_ci_release_configure_preset)"
+  printf '%s\n' "${KANO_CPP_LINUX_FETCHCONTENT_DEPS_ROOT:-$KANO_CPP_LINUX_CI_CPP_ROOT/out/obj/$release_configure_preset/_deps}"
+}
+
+kano_cpp_linux_ci_collect_fetchcontent_source_args() {
+  local -n out_ref="$1"
+  local deps_root=""
+  local entry=""
+  local key=""
+  local source_dir=""
+
+  deps_root="$(kano_cpp_linux_ci_fetchcontent_deps_root)"
+  [[ -d "$deps_root" ]] || return 0
+
+  for entry in \
+    "NLOHMANN_JSON:nlohmann_json-src" \
+    "CLI11:cli11-src" \
+    "FTXUI:ftxui-src" \
+    "TOMLPLUSPLUS:tomlplusplus-src" \
+    "CATCH2:catch2-src" \
+    "RAPIDCHECK:rapidcheck-src"
+  do
+    key="${entry%%:*}"
+    source_dir="$deps_root/${entry#*:}"
+    if [[ -d "$source_dir" ]]; then
+      echo "[linux-ci] reusing FetchContent source $key from $source_dir"
+      out_ref+=("-DFETCHCONTENT_SOURCE_DIR_${key}=$source_dir")
+    fi
+  done
+}
+
 kano_cpp_linux_ci_coverage_configure_preset() {
   printf '%s\n' "${KANO_CPP_LINUX_COVERAGE_CONFIGURE_PRESET:-linux-ninja-clang-coverage}"
 }
@@ -322,12 +355,14 @@ kano_cpp_linux_ci_run_release_build() {
 
 kano_cpp_linux_ci_run_coverage_build() {
   local configure_preset build_preset
+  local -a fetchcontent_source_args=()
   configure_preset="$(kano_cpp_linux_ci_coverage_configure_preset)"
   build_preset="$(kano_cpp_linux_ci_coverage_build_preset)"
+  kano_cpp_linux_ci_collect_fetchcontent_source_args fetchcontent_source_args
 
   (
     cd "$KANO_CPP_LINUX_CI_CPP_ROOT"
-    cmake --preset "$configure_preset"
+    cmake --preset "$configure_preset" "${fetchcontent_source_args[@]}"
     cmake --build --preset "$build_preset"
   )
 }
