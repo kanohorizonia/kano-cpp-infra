@@ -40,10 +40,13 @@ if raw:
     data = json.loads(raw)
 data["KANO_CPP_INFRA_PGO_MODE"] = mode
 if mode == "use":
-  data.setdefault(
-      "KOG_BUILD_TESTS",
-      os.environ.get("KANO_CPP_INFRA_PGO_USE_BUILD_TESTS", "ON"),
-  )
+    pgo_profile_dir = os.environ.get("INF_PGO_PROFILE_DIR", "").strip()
+    if pgo_profile_dir:
+        data["KOG_PGO_PROFILE_DIR"] = pgo_profile_dir
+    data.setdefault(
+        "KOG_BUILD_TESTS",
+        os.environ.get("KANO_CPP_INFRA_PGO_USE_BUILD_TESTS", "ON"),
+    )
 print(json.dumps(data))
 PY
 }
@@ -172,6 +175,13 @@ default_use_build_preset() {
   fi
 }
 
+prepare_pgo_profile_paths() {
+  export INF_BUILD_ROOT="${INF_BUILD_ROOT:-$CPP_ROOT/out}"
+  export INF_PGO_ROOT="${INF_PGO_ROOT:-$CPP_ROOT/out/pgo}"
+  export INF_PGO_PROFILE_DIR="${KANO_CPP_INFRA_PGO_PROFILE_DIR:-${INF_PGO_PROFILE_DIR:-$CPP_ROOT/out/pgo}}"
+  mkdir -p "$INF_PGO_PROFILE_DIR"
+}
+
 pgo_compiler_id_for_preset() {
   local preset="${1:-}"
   case "$preset" in
@@ -265,6 +275,7 @@ run_use_build() {
   local build_preset="${KANO_CPP_INFRA_PGO_USE_BUILD_PRESET:-$(default_use_build_preset)}"
   local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
 
+  prepare_pgo_profile_paths
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
   export KANO_CPP_ROOT="$CPP_ROOT"
   if is_windows_host; then
@@ -477,6 +488,7 @@ main() {
 
   if [[ "$stage" == "pgo-build" ]]; then
     prepare_pgo_collect_environment
+    prepare_pgo_profile_paths
     bash "$PGO_WORKFLOW_SH" merge
     copy_msvc_pgd_to_use_dir
     run_use_build
@@ -508,6 +520,7 @@ main() {
     return 0
   fi
 
+  prepare_pgo_profile_paths
   bash "$PGO_WORKFLOW_SH" merge
   copy_msvc_pgd_to_use_dir
   run_use_build
