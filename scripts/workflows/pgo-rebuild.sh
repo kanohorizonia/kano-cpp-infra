@@ -196,6 +196,40 @@ pgo_compiler_id_for_preset() {
   esac
 }
 
+remove_build_tree_for_reconfigure() {
+  local in_path="$1"
+  [[ -n "$in_path" ]] || return 0
+  [[ -d "$in_path" ]] || return 0
+
+  local trash_path="${in_path}.delete-$RANDOM-$$"
+  if mv "$in_path" "$trash_path" 2>/dev/null; then
+    local attempt
+    for attempt in 1 2 3; do
+      chmod -R u+w "$trash_path" 2>/dev/null || true
+      if rm -rf "$trash_path" 2>/dev/null; then
+        return 0
+      fi
+      sleep "$attempt"
+    done
+    echo "[pgo] warning: stale build dir moved aside but not fully deleted: $trash_path" >&2
+    return 0
+  fi
+
+  local attempt
+  for attempt in 1 2 3; do
+    chmod -R u+w "$in_path" 2>/dev/null || true
+    if rm -rf "$in_path" 2>/dev/null; then
+      return 0
+    fi
+    sleep "$attempt"
+  done
+
+  if [[ -d "$in_path" ]]; then
+    echo "[pgo] failed to clean stale build dir: $in_path" >&2
+    return 1
+  fi
+}
+
 run_collect_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-$(default_collect_build_preset)}"
@@ -224,7 +258,7 @@ run_collect_build() {
   local collect_obj_dir="$CPP_ROOT/out/obj/$configure_preset"
   if [[ -d "$collect_obj_dir" ]]; then
     echo "[pgo] cleaning stale collect build dir: $collect_obj_dir" >&2
-    rm -rf "$collect_obj_dir"
+    remove_build_tree_for_reconfigure "$collect_obj_dir"
   fi
 
   if is_windows_host; then
