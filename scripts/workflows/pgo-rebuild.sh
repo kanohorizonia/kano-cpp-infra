@@ -163,6 +163,16 @@ default_use_build_preset() {
   fi
 }
 
+pgo_compiler_id_for_preset() {
+  local preset="${1:-}"
+  case "$preset" in
+    *msvc*) printf '%s\n' "MSVC" ;;
+    *gcc*) printf '%s\n' "GNU" ;;
+    *clang*) printf '%s\n' "Clang" ;;
+    *) printf '%s\n' "" ;;
+  esac
+}
+
 run_collect_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-$(default_collect_build_preset)}"
@@ -178,6 +188,12 @@ run_collect_build() {
   fi
   if is_windows_host; then
     export KANO_CPP_INFRA_PGO_COMPILER_ID="MSVC"
+  else
+    local compiler_id
+    compiler_id="$(pgo_compiler_id_for_preset "$configure_preset")"
+    if [[ -n "$compiler_id" ]]; then
+      export KANO_CPP_INFRA_PGO_COMPILER_ID="$compiler_id"
+    fi
   fi
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode collect)"
 
@@ -226,6 +242,25 @@ run_use_build() {
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
 }
 
+prepare_pgo_collect_environment() {
+  local configure_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
+
+  export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET="$configure_preset"
+  if is_windows_host; then
+    export INF_PGO_COLLECT_DIR="$CPP_ROOT/out/bin/$configure_preset/debug"
+    export KANO_CPP_INFRA_PGO_COMPILER_ID="MSVC"
+  else
+    export INF_PGO_COLLECT_DIR="$CPP_ROOT/out/obj/$configure_preset"
+    local compiler_id
+    compiler_id="$(pgo_compiler_id_for_preset "$configure_preset")"
+    if [[ -n "$compiler_id" ]]; then
+      export KANO_CPP_INFRA_PGO_COMPILER_ID="$compiler_id"
+    fi
+  fi
+}
+
 copy_msvc_pgd_to_use_dir() {
   if ! is_windows_host; then
     return 0
@@ -265,6 +300,16 @@ run_gather_stage() {
   # The stage itself supports custom commands via
   # KANO_CPP_INFRA_PGO_GATHER_COMMAND / KOG_PGO_GATHER_COMMAND.
   bash "$PGO_GATHER_SH"
+}
+
+run_pgo_test_stage() {
+  local preset="${KANO_CPP_INFRA_PGO_TEST_PRESET:-$(default_use_build_preset)}"
+  local lane="${KANO_TEST_LANE:-quick}"
+
+  export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_ROOT="$CPP_ROOT"
+  export KANO_SKIP_TEST_BUILD="${KANO_SKIP_TEST_BUILD:-1}"
+  bash "$STAGES_ROOT/test-lane.sh" "$lane" "$preset"
 }
 
 resolve_profile_manifest() {
@@ -361,14 +406,43 @@ run_microsoft_coverage_prepass() {
 }
 
 main() {
+  local stage="${1:-all}"
+  case "$stage" in
+    all|pgi-build|profile-gather|pgo-build|pgo-test)
+      shift || true
+      ;;
+    *)
+      stage="all"
+      ;;
+  esac
+
   require_file "$BUILD_METADATA_SH"
   require_file "$UNIX_PRESET_BUILD_SH"
   require_file "$WINDOWS_PRESET_BUILD_SH"
   require_file "$PGO_GATHER_SH"
   require_file "$PGO_WORKFLOW_SH"
   require_file "$PROFILE_MANIFEST_SH"
+  require_file "$STAGES_ROOT/test-lane.sh"
 
   resolve_profile_manifest
+
+  if [[ "$stage" == "profile-gather" ]]; then
+    run_gather_stage
+    return 0
+  fi
+
+  if [[ "$stage" == "pgo-build" ]]; then
+    prepare_pgo_collect_environment
+    bash "$PGO_WORKFLOW_SH" merge
+    copy_msvc_pgd_to_use_dir
+    run_use_build
+    return 0
+  fi
+
+  if [[ "$stage" == "pgo-test" ]]; then
+    run_pgo_test_stage
+    return 0
+  fi
 
   if is_windows_host && [[ "${KANO_CPP_INFRA_COVERAGE_TOOL:-}" == "microsoft" ]]; then
     echo "[pgo] split pipeline enabled: Microsoft coverage prepass + PGO collect/use" >&2
@@ -378,6 +452,11 @@ main() {
   fi
 
   run_collect_build
+
+  if [[ "$stage" == "pgi-build" ]]; then
+    return 0
+  fi
+
   run_gather_stage
 
   if [[ "${KANO_CPP_INFRA_PGO_REBUILD_SKIP_USE:-0}" == "1" ]]; then
