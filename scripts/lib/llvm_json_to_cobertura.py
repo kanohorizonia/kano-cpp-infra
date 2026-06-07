@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -11,6 +13,42 @@ from pathlib import Path
 
 def normalize(path_str: str) -> str:
     return str(Path(path_str)).replace("\\", "/")
+
+
+def split_csv_env(name: str) -> list[str]:
+    raw = os.environ.get(name, "")
+    if not raw.strip():
+        return []
+    return [item.strip().replace("\\", "/").strip("/") for item in re.split(r"[,;]", raw) if item.strip()]
+
+
+def default_include_prefixes(repo_root: Path) -> list[str]:
+    configured = split_csv_env("KANO_CPP_INFRA_COVERAGE_INCLUDE_PREFIXES")
+    if configured:
+        return configured
+    if (repo_root / "code").is_dir():
+        return ["code"]
+    return []
+
+
+def default_exclude_patterns() -> list[str]:
+    configured = split_csv_env("KANO_CPP_INFRA_COVERAGE_EXCLUDE_REGEX")
+    if configured:
+        return configured
+    return [
+        r"(^|/)(out|build|cmake-build-[^/]*|_deps|thirdparty|third_party|vendor|vcpkg_installed|\.vcpkg)(/|$)",
+        r"(^|/)(catch2|ftxui)(/|$)",
+    ]
+
+
+def is_first_party_file(rel_path: str, include_prefixes: list[str], exclude_regexes: list[re.Pattern[str]]) -> bool:
+    rel_path = rel_path.replace("\\", "/").lstrip("./")
+    for exclude_regex in exclude_regexes:
+        if exclude_regex.search(rel_path):
+            return False
+    if include_prefixes:
+        return any(rel_path == prefix or rel_path.startswith(prefix.rstrip("/") + "/") for prefix in include_prefixes)
+    return True
 
 
 def line_hits_from_segments(segments: list[list[int]]) -> dict[int, int]:
@@ -36,6 +74,8 @@ def main() -> int:
     json_path = Path(sys.argv[1])
     repo_root = Path(sys.argv[2]).resolve()
     out_xml = Path(sys.argv[3])
+    include_prefixes = default_include_prefixes(repo_root)
+    exclude_regexes = [re.compile(pattern, re.IGNORECASE) for pattern in default_exclude_patterns()]
 
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     file_hits: dict[str, dict[int, int]] = {}
@@ -66,6 +106,8 @@ def main() -> int:
     for filename, hits in sorted(file_hits.items()):
         resolved = Path(filename).resolve()
         rel_path = normalize(str(resolved.relative_to(repo_root))) if resolved.is_relative_to(repo_root) else filename
+        if not is_first_party_file(rel_path, include_prefixes, exclude_regexes):
+            continue
         package_name = rel_path.rsplit("/", 1)[0] if "/" in rel_path else "."
         package_files[package_name].append((rel_path, hits))
 
