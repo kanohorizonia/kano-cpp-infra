@@ -40,7 +40,10 @@ if raw:
     data = json.loads(raw)
 data["KANO_CPP_INFRA_PGO_MODE"] = mode
 if mode == "use":
-  data.setdefault("KOG_BUILD_TESTS", "OFF")
+  data.setdefault(
+      "KOG_BUILD_TESTS",
+      os.environ.get("KANO_CPP_INFRA_PGO_USE_BUILD_TESTS", "ON"),
+  )
 print(json.dumps(data))
 PY
 }
