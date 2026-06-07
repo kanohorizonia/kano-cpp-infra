@@ -437,16 +437,7 @@ static int parse_line(const char* line_in, const char* current_section,
     char* raw_val = str_trim_inplace(eq + 1);
     if (!*key_part || !*raw_val) return 0;
 
-    /* strip trailing comment from raw_val (already done by trim_comment_inplace on full line) */
-    /* but handle inline comments after value */
-    char* comment_ptr = raw_val;
-    while (*comment_ptr && *comment_ptr != ' ' && *comment_ptr != '\t' && *comment_ptr != ' #') {
-        comment_ptr++;
-    }
-    if (*comment_ptr == ' ' || *comment_ptr == '\t') {
-        *comment_ptr = '\0';
-        str_trim_inplace(raw_val);
-    }
+    /* trim_comment_inplace already removed comments while preserving quoted whitespace. */
     if (!*raw_val) return -1;
 
     /* build full key */
@@ -519,6 +510,7 @@ static int toml_parse_file(FILE* f, TomlMap* out) {
     size_t content_cap = 0;
     size_t content_len = 0;
     char line_buf[4096];
+    char scratch_buf[4096];
     char current_section[256] = {0};
 
     while (fgets(line_buf, (int)sizeof(line_buf), f)) {
@@ -532,7 +524,7 @@ static int toml_parse_file(FILE* f, TomlMap* out) {
         const char* p = str_skip_ws(line_buf);
         if (!*p || *p == '#') continue;
 
-        int r = parse_line(line_buf, current_section, out, line_buf, sizeof(line_buf));
+        int r = parse_line(line_buf, current_section, out, scratch_buf, sizeof(scratch_buf));
         if (r == 0) {
             tomap_free(out);
             return 0;
