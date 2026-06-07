@@ -1353,12 +1353,14 @@ run_collect_tests_default() {
   fi
 
   echo "[pgo-gather] using gather mode: $gather_mode, preset: $preset_name" >&2
-  # - CLI functional path
+  # PGO gather is a training workload, not the authoritative test pass. Keep
+  # CLI coverage on short, non-mutating command paths; the later test stage
+  # runs the full functional suite and publishes the authoritative JUnit.
   # - commit-plan engine + properties
   # - export/archive paths
   # - TUI command-state/autocomplete paths
   local -a suite=(
-    "kano_git_cli_tests|[functional]"
+    "kano_git_cli_tests|[cli]"
     "kano_git_commit_plan_tests|[unit],[property]"
     "kano_git_export_tests|[unit],[integration]"
     "kano_git_tui_tests|[unit],[property]"
