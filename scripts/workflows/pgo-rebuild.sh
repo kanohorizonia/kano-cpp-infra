@@ -46,6 +46,10 @@ data = {}
 if raw:
     data = json.loads(raw)
 data["KANO_CPP_INFRA_PGO_MODE"] = mode
+if mode == "collect":
+    coverage_mapping = os.environ.get("KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING", "").strip()
+    if coverage_mapping:
+        data["KOG_PGO_COLLECT_ENABLE_COVERAGE_MAPPING"] = coverage_mapping
 if mode == "use":
     pgo_profile_dir = os.environ.get("INF_PGO_PROFILE_DIR", "").strip()
     if pgo_profile_dir:
@@ -238,7 +242,12 @@ run_collect_build() {
   local build_preset="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-$(default_collect_build_preset)}"
   local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
   local original_build_targets="${KANO_CPP_INFRA_BUILD_TARGETS:-}"
+  local original_collect_coverage_mapping="${KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING:-}"
+  local had_collect_coverage_mapping=0
   local collect_build_targets="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_TARGETS:-}"
+  if [[ "${KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING+x}" == "x" ]]; then
+    had_collect_coverage_mapping=1
+  fi
 
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
   export KANO_CPP_ROOT="$CPP_ROOT"
@@ -256,6 +265,10 @@ run_collect_build() {
     if [[ -n "$compiler_id" ]]; then
       export KANO_CPP_INFRA_PGO_COMPILER_ID="$compiler_id"
     fi
+  fi
+  if is_macos_host && [[ "$had_collect_coverage_mapping" -eq 0 ]]; then
+    export KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING="OFF"
+    echo "[pgo] macOS collect coverage mapping: OFF" >&2
   fi
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode collect)"
   if [[ -z "$collect_build_targets" && "$(uname -s 2>/dev/null || true)" == "Darwin" && "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
@@ -288,6 +301,11 @@ run_collect_build() {
     export KANO_CPP_INFRA_BUILD_TARGETS="$original_build_targets"
   else
     unset KANO_CPP_INFRA_BUILD_TARGETS || true
+  fi
+  if [[ "$had_collect_coverage_mapping" -eq 1 ]]; then
+    export KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING="$original_collect_coverage_mapping"
+  else
+    unset KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING || true
   fi
 }
 
