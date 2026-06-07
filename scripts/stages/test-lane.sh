@@ -10,6 +10,28 @@ REPO_ROOT="$(cd -- "$CPP_ROOT/../.." && pwd)"
 LANE="${1:-default}"
 PRESET="${2:-windows-ninja-msvc-release}"
 
+resolve_python_bin() {
+  if [[ -n "${KANO_PYTHON:-}" ]]; then
+    printf '%s\n' "$KANO_PYTHON"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return 0
+  fi
+
+  echo "python3 or python is required." >&2
+  return 1
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 case "$LANE" in
   quick)
     REPORT_ROOT="$CPP_ROOT/.kano/tmp/pgo/quick-test-reports"
@@ -53,7 +75,7 @@ cp -f "$INFRA_BASE_DIR/config/suite-map.kano-git-master.json" "$REPORT_ROOT/raw/
 
 bash "$CPP_ROOT/code/tests/run_tests.sh" "$PRESET" "$LANE"
 if [[ -f "$KANO_TEST_XML" ]]; then
-  python "$INFRA_BASE_DIR/scripts/tools/generate-bdd-metadata-from-junit.py" \
+  "$PYTHON_BIN" "$INFRA_BASE_DIR/scripts/tools/generate-bdd-metadata-from-junit.py" \
     "$KANO_TEST_XML" \
     "$KANO_BDD_METADATA_DIR" \
     "kano_git_cli_tests"

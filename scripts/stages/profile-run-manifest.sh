@@ -15,6 +15,28 @@ if [[ -z "$compiler" ]]; then
   esac
 fi
 
+resolve_python_bin() {
+  if [[ -n "${KANO_PYTHON:-}" ]]; then
+    printf '%s\n' "$KANO_PYTHON"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return 0
+  fi
+
+  echo "python3 or python is required." >&2
+  return 1
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 coverage_provider="${KANO_CXX_COVERAGE_PROVIDER:-${KANO_CPP_INFRA_COVERAGE_TOOL:-none}}"
 pgo_provider="${KANO_CXX_PGO_PROVIDER:-}"
 if [[ -z "$pgo_provider" ]]; then
@@ -52,5 +74,5 @@ if [[ -n "${KANO_CXX_COVERAGE_REPORT_PATHS:-}" ]]; then
   args+=(--coverage-report-paths "$KANO_CXX_COVERAGE_REPORT_PATHS")
 fi
 
-python "$CPP_ROOT/shared/infra/scripts/profiling/profile_run_capabilities.py" "${args[@]}"
+"$PYTHON_BIN" "$CPP_ROOT/shared/infra/scripts/profiling/profile_run_capabilities.py" "${args[@]}"
 echo "[profile-run] manifest: $out" >&2
