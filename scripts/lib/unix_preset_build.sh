@@ -38,10 +38,12 @@ kano_cpp_run_unix_preset() {
   local build_prefix="${3:-KANO}"
   local -a extra_args=()
   local -a cache_override_args=()
+  local -a build_args=()
   local llvm_prefix=""
   local sdk_path=""
   local arch=""
   local preset_name=""
+  local build_target=""
 
   if [[ -z "$in_configure_preset" || -z "$in_build_preset" ]]; then
     echo "Usage: kano_cpp_run_unix_preset <configure-preset> <build-preset> [prefix]" >&2
@@ -101,7 +103,14 @@ KANO_CACHE_ARGS_PY
     kano_cpp_collect_build_metadata
     kano_cpp_print_self_build_toolchain
     cmake --preset "$in_configure_preset" "${extra_args[@]}" "${cache_override_args[@]}"
-    cmake --build --preset "$in_build_preset"
+    build_args=(--preset "$in_build_preset")
+    if [[ -n "${KANO_CPP_INFRA_BUILD_TARGETS:-}" ]]; then
+      for build_target in ${KANO_CPP_INFRA_BUILD_TARGETS//,/ }; do
+        [[ -n "$build_target" ]] || continue
+        build_args+=(--target "$build_target")
+      done
+    fi
+    cmake --build "${build_args[@]}"
   )
 }
 

@@ -18,6 +18,13 @@ PYTHON_RESOLVER_SH="$LIB_ROOT/python_resolver.sh"
 source "$PYTHON_RESOLVER_SH"
 PYTHON_BIN="$(kano_resolve_python_bin)"
 
+if [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+  # Apple ld can fail to link large x64 Clang binaries that combine coverage
+  # mapping and PGO runtime data. Keep the macOS training lane representative
+  # and bounded by default; explicit full gather runs can set this to 0.
+  export KANO_CPP_INFRA_PGO_GATHER_QUICK="${KANO_CPP_INFRA_PGO_GATHER_QUICK:-1}"
+fi
+
 require_file() {
   local in_path="$1"
   if [[ ! -f "$in_path" ]]; then
@@ -230,6 +237,8 @@ run_collect_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-$(default_collect_build_preset)}"
   local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_build_targets="${KANO_CPP_INFRA_BUILD_TARGETS:-}"
+  local collect_build_targets="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_TARGETS:-}"
 
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
   export KANO_CPP_ROOT="$CPP_ROOT"
@@ -249,6 +258,13 @@ run_collect_build() {
     fi
   fi
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode collect)"
+  if [[ -z "$collect_build_targets" && "$(uname -s 2>/dev/null || true)" == "Darwin" && "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
+    collect_build_targets="kano_git_cli_tests"
+  fi
+  if [[ -n "$collect_build_targets" ]]; then
+    export KANO_CPP_INFRA_BUILD_TARGETS="$collect_build_targets"
+    echo "[pgo] collect build targets: $collect_build_targets" >&2
+  fi
 
   # Clean the pgo-collect build dir to ensure MSVC is used (not a stale MinGW cache)
   local collect_obj_dir="$CPP_ROOT/out/obj/$configure_preset"
@@ -268,6 +284,11 @@ run_collect_build() {
   fi
 
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
+  if [[ -n "$original_build_targets" ]]; then
+    export KANO_CPP_INFRA_BUILD_TARGETS="$original_build_targets"
+  else
+    unset KANO_CPP_INFRA_BUILD_TARGETS || true
+  fi
 }
 
 run_use_build() {

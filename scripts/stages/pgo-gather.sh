@@ -1331,6 +1331,9 @@ run_collect_tests_default() {
   local filter
   local candidate
   local gather_mode="${KANO_CPP_INFRA_PGO_GATHER_MODE:-pgo}"
+  local host_name
+
+  host_name="$(uname -s 2>/dev/null || true)"
 
   preset_name="$(resolve_collect_preset)"
   bin_root="$CPP_ROOT/out/bin/$preset_name/debug"
@@ -1419,9 +1422,15 @@ run_collect_tests_default() {
   # running only a minimal representative test subset.
   if [[ "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
     echo "[pgo-gather] quick mode enabled: reduced gather suite" >&2
-    suite=(
-      "kano_git_tui_tests|[unit],[property]"
-    )
+    if [[ "$host_name" == "Darwin" ]]; then
+      suite=(
+        "kano_git_cli_tests|[cli]"
+      )
+    else
+      suite=(
+        "kano_git_tui_tests|[unit],[property]"
+      )
+    fi
   fi
 
   local -a collected_binaries=()
