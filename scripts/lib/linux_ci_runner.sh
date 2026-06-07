@@ -112,7 +112,8 @@ kano_cpp_linux_ci_forward_env_args() {
     KANO_CPP_INFRA_PGO_COLLECT_BUILD_TARGETS \
     KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET \
     KANO_CPP_INFRA_PGO_USE_BUILD_PRESET \
-    KANO_CPP_INFRA_PGO_TEST_PRESET
+    KANO_CPP_INFRA_PGO_TEST_PRESET \
+    KANO_GIT_BINARY_PATH
   do
     if [[ -n "${!name+x}" ]]; then
       out_ref+=(-e "$name=${!name}")
@@ -628,6 +629,17 @@ kano_cpp_linux_ci_canonicalize_gather_reports() {
 kano_cpp_linux_ci_require_release_binary() {
   local bin_dir=""
   local binary_path=""
+
+  if [[ -n "${KANO_GIT_BINARY_PATH:-}" ]]; then
+    binary_path="$(kano_cpp_linux_ci_resolve_path "$KANO_GIT_BINARY_PATH")"
+    if [[ ! -f "$binary_path" ]]; then
+      echo "Configured Linux native binary is missing: $binary_path" >&2
+      return 1
+    fi
+    chmod u+x "$binary_path" >/dev/null 2>&1 || true
+    printf '%s\n' "$binary_path"
+    return 0
+  fi
 
   bin_dir="$(kano_cpp_linux_ci_resolve_bin_dir "$KANO_CPP_LINUX_CI_CPP_ROOT" "$(kano_cpp_linux_ci_release_build_preset)")" || {
     echo "Unable to resolve Linux release binary directory." >&2
