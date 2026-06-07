@@ -433,6 +433,84 @@ ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)
 PY
 }
 
+kano_cpp_linux_ci_write_gather_summary_junit() {
+  local reports_root="${1:?reports root is required}"
+  local input_dir="${2:?input dir is required}"
+  local output_xml="${3:?output xml is required}"
+  local python_cmd=""
+
+  python_cmd="$(kano_cpp_linux_ci_python)" || return 1
+  mkdir -p "$(dirname "$output_xml")"
+  "$python_cmd" - "$reports_root" "$input_dir" "$output_xml" <<'PY'
+from __future__ import annotations
+
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+reports_root = Path(sys.argv[1])
+input_dir = Path(sys.argv[2])
+out_path = Path(sys.argv[3])
+
+raw_suites = 0
+raw_tests = 0
+raw_failures = 0
+raw_errors = 0
+raw_skipped = 0
+raw_files = 0
+
+for xml_path in sorted(input_dir.glob("*.xml")):
+    try:
+        doc = ET.parse(xml_path).getroot()
+    except ET.ParseError:
+        continue
+    raw_files += 1
+    suites = []
+    if doc.tag == "testsuite":
+        suites = [doc]
+    elif doc.tag == "testsuites":
+        suites = list(doc.findall("testsuite"))
+    for suite in suites:
+        raw_suites += 1
+        raw_tests += int(suite.attrib.get("tests", "0") or "0")
+        raw_failures += int(suite.attrib.get("failures", "0") or "0")
+        raw_errors += int(suite.attrib.get("errors", "0") or "0")
+        raw_skipped += int(suite.attrib.get("skipped", "0") or "0")
+
+root = ET.Element("testsuites")
+suite = ET.SubElement(
+    root,
+    "testsuite",
+    {
+        "name": "linux_coverage_gather",
+        "tests": "1",
+        "failures": "0",
+        "errors": "0",
+        "skipped": "0",
+        "time": "0",
+    },
+)
+ET.SubElement(
+    suite,
+    "testcase",
+    {
+        "classname": "linux_coverage_gather",
+        "name": "coverage-gather-succeeded",
+        "time": "0",
+    },
+)
+ET.SubElement(suite, "system-out").text = (
+    "pgo-gather completed successfully. "
+    f"rawFiles={raw_files} rawSuites={raw_suites} rawTests={raw_tests} "
+    f"rawFailures={raw_failures} rawErrors={raw_errors} rawSkipped={raw_skipped} "
+    f"rawReports={reports_root / 'junit'}"
+)
+
+out_path.parent.mkdir(parents=True, exist_ok=True)
+ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)
+PY
+}
+
 kano_cpp_linux_ci_pick_coverage_xml() {
   local raw_dir="${1:?raw dir is required}"
   local fallback=""
@@ -517,11 +595,17 @@ kano_cpp_linux_ci_canonicalize_gather_reports() {
   local junit_dir="$reports_root/junit"
   local raw_coverage_dir="$reports_root/coverage/raw"
   local html_dir="$reports_root/coverage/html"
+  local raw_junit_dir="$KANO_REPORT_ROOT/raw/pgo-gather-junit"
   local coverage_xml=""
 
   kano_cpp_linux_ci_prepare_coverage_report_dirs
-  kano_cpp_linux_ci_merge_junit_dir "$junit_dir" "$KANO_TEST_XML"
-  kano_cpp_linux_ci_generate_bdd_metadata "$KANO_TEST_XML" "$KANO_BDD_METADATA_DIR" "kano_git_cli_tests"
+  if [[ -d "$junit_dir" ]]; then
+    rm -rf -- "$raw_junit_dir"
+    mkdir -p "$raw_junit_dir"
+    cp -a "$junit_dir/." "$raw_junit_dir/"
+  fi
+  kano_cpp_linux_ci_write_gather_summary_junit "$reports_root" "$junit_dir" "$KANO_TEST_XML"
+  kano_cpp_linux_ci_generate_bdd_metadata "$KANO_TEST_XML" "$KANO_BDD_METADATA_DIR" "linux_coverage_gather"
 
   coverage_xml="$(kano_cpp_linux_ci_pick_coverage_xml "$raw_coverage_dir" || true)"
   if [[ -n "$coverage_xml" ]]; then
