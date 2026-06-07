@@ -12,28 +12,11 @@ WINDOWS_PRESET_BUILD_SH="$LIB_ROOT/windows_preset_build.sh"
 PGO_GATHER_SH="$STAGES_ROOT/pgo-gather.sh"
 PGO_WORKFLOW_SH="$LIB_ROOT/pgo_workflow.sh"
 PROFILE_MANIFEST_SH="$STAGES_ROOT/profile-run-manifest.sh"
+PYTHON_RESOLVER_SH="$LIB_ROOT/python_resolver.sh"
 
-resolve_python_bin() {
-  if [[ -n "${KANO_PYTHON:-}" ]]; then
-    printf '%s\n' "$KANO_PYTHON"
-    return 0
-  fi
-
-  if command -v python3 >/dev/null 2>&1; then
-    command -v python3
-    return 0
-  fi
-
-  if command -v python >/dev/null 2>&1; then
-    command -v python
-    return 0
-  fi
-
-  echo "python3 or python is required." >&2
-  return 1
-}
-
-PYTHON_BIN="$(resolve_python_bin)"
+# shellcheck source=/dev/null
+source "$PYTHON_RESOLVER_SH"
+PYTHON_BIN="$(kano_resolve_python_bin)"
 
 require_file() {
   local in_path="$1"
@@ -45,7 +28,7 @@ require_file() {
 
 json_with_pgo_mode() {
   local in_mode="$1"
-  "$PYTHON_BIN" - "$in_mode" <<'PY'
+  kano_python "$PYTHON_BIN" - "$in_mode" <<'PY'
 import json
 import os
 import sys
@@ -65,7 +48,7 @@ PY
 cmake_preset_exists() {
   local preset_name="$1"
   [[ -f "$CPP_ROOT/CMakePresets.json" ]] || return 1
-  "$PYTHON_BIN" - "$CPP_ROOT/CMakePresets.json" "$preset_name" <<'PY'
+  kano_python "$PYTHON_BIN" - "$CPP_ROOT/CMakePresets.json" "$preset_name" <<'PY'
 import json
 import sys
 from pathlib import Path

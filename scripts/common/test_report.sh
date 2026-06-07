@@ -4,6 +4,7 @@ set -euo pipefail
 
 KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/report_skill_adapter.sh"
+. "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/../lib/python_resolver.sh"
 
 run_test_report() {
   : "${KANO_REPORT_SLUG:?KANO_REPORT_SLUG is required}"
@@ -24,7 +25,9 @@ run_test_report() {
     eval "$KANO_TEST_COMMAND"
   )
 
-  python "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/render_junit_test_report.py" "$KANO_TEST_XML" "$KANO_TEST_REPORT_DIR" "$report_title"
+  local python_bin
+  python_bin="$(kano_resolve_python_bin)"
+  kano_python "$python_bin" "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/render_junit_test_report.py" "$KANO_TEST_XML" "$KANO_TEST_REPORT_DIR" "$report_title"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

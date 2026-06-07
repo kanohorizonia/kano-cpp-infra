@@ -6,11 +6,15 @@ INF_PROFILE_COMMON_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # Allow wrapper scripts to override these via env vars; fall back to direct infra layout.
 INF_PROFILE_SCRIPT_ROOT="${INF_PROFILE_SCRIPT_ROOT:-$INF_PROFILE_COMMON_DIR}"
 INF_PROFILE_CPP_ROOT="${INF_PROFILE_CPP_ROOT:-${INF_CPP_ROOT:-$(cd -- "$INF_PROFILE_COMMON_DIR/../../../.." && pwd)}}"
+INF_PROFILE_PYTHON_RESOLVER_SH="$INF_PROFILE_CPP_ROOT/shared/infra/scripts/lib/python_resolver.sh"
 INF_PROFILE_REPO_ROOT="${INF_PROFILE_REPO_ROOT:-$(cd -- "$INF_PROFILE_CPP_ROOT/../.." && pwd)}"
 INF_PROFILE_TMP_ROOT="${INF_PROFILE_TMP_ROOT:-$INF_PROFILE_REPO_ROOT/.kano/tmp/profiling}"
 INF_PROFILE_REPORT_ROOT="${INF_PROFILE_REPORT_ROOT:-$INF_PROFILE_REPO_ROOT/docs/profiling}"
 INF_BASELINE_SCRIPT="${INF_BASELINE_SCRIPT:-$INF_PROFILE_CPP_ROOT/shared/infra/scripts/common/measure_iteration_baseline.sh}"
 INF_PGO_REBUILD_SCRIPT="${INF_PGO_REBUILD_SCRIPT:-$INF_PROFILE_CPP_ROOT/shared/infra/scripts/workflows/pgo-rebuild.sh}"
+
+# shellcheck source=/dev/null
+source "$INF_PROFILE_PYTHON_RESOLVER_SH"
 
 inf_profile_host_os() {
   local os_name

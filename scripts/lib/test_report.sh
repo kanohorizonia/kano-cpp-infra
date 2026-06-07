@@ -4,6 +4,7 @@ set -euo pipefail
 
 KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/report_skill_adapter.sh"
+. "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/python_resolver.sh"
 
 kano_cpp_infra_report_resolve_path_fallback() {
   local raw_path="${1:-}"
@@ -39,6 +40,8 @@ run_test_report() {
   report_skill_load
   export KANO_CPP_TEST_SKILL_ROOT="${KANO_CPP_TEST_SKILL_ROOT:?}"
   local report_title="${KANO_REPORT_TITLE:-${KANO_REPORT_SLUG}}"
+  local python_bin
+  python_bin="$(kano_resolve_python_bin)"
 
   # shellcheck disable=SC1090
   . "$KANO_CPP_TEST_SKILL_ROOT/src/shell/reports/common/report-env.sh"
@@ -62,7 +65,7 @@ run_test_report() {
   )
 
 if [[ -f "$KANO_TEST_XML" ]]; then
-    python "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/../tools/generate-bdd-metadata-from-junit.py" \
+    kano_python "$python_bin" "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/../tools/generate-bdd-metadata-from-junit.py" \
       "$KANO_TEST_XML" \
       "$KANO_BDD_METADATA_DIR" \
       "${KANO_TEST_BINARY_NAME:-kano_git_cli_tests}"
@@ -77,7 +80,7 @@ else
 EOF
 fi
 
-  python "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/render_junit_test_report.py" "$KANO_TEST_XML" "$KANO_TEST_REPORT_DIR" "$report_title"
+  kano_python "$python_bin" "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/render_junit_test_report.py" "$KANO_TEST_XML" "$KANO_TEST_REPORT_DIR" "$report_title"
   bash "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/package-reports-with-skill.sh"
 }
 

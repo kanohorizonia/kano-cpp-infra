@@ -2,28 +2,11 @@
 set -euo pipefail
 
 KANO_INFRA_UNIX_PRESET_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_RESOLVER_SH="$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/../lib/python_resolver.sh"
 
-resolve_python_bin() {
-  if [[ -n "${KANO_PYTHON:-}" ]]; then
-    printf '%s\n' "$KANO_PYTHON"
-    return 0
-  fi
-
-  if command -v python3 >/dev/null 2>&1; then
-    command -v python3
-    return 0
-  fi
-
-  if command -v python >/dev/null 2>&1; then
-    command -v python
-    return 0
-  fi
-
-  echo "python3 or python is required." >&2
-  return 1
-}
-
-PYTHON_BIN="$(resolve_python_bin)"
+# shellcheck source=/dev/null
+source "$PYTHON_RESOLVER_SH"
+PYTHON_BIN="$(kano_resolve_python_bin)"
 
 # Bootstrap pixi environment if not already active.
 # shellcheck source=/dev/null
@@ -69,7 +52,7 @@ kano_cpp_run_unix_preset() {
 
   if [[ -n "${INF_CMAKE_CACHE_ARGS_JSON:-}" ]]; then
     # shellcheck disable=SC2207
-    cache_override_args+=( $("$PYTHON_BIN" - <<'KANO_CACHE_ARGS_PY'
+    cache_override_args+=( $(kano_python "$PYTHON_BIN" - <<'KANO_CACHE_ARGS_PY'
 import json, os
 for key, value in json.loads(os.environ['INF_CMAKE_CACHE_ARGS_JSON']).items():
     print(f'-D{key}={value}')
