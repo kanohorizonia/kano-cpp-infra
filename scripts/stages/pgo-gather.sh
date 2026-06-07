@@ -1470,14 +1470,31 @@ run_collect_tests_default() {
   # running only a minimal representative test subset.
   if [[ "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
     echo "[pgo-gather] quick mode enabled: reduced gather suite" >&2
-    if [[ "$host_name" == "Darwin" ]]; then
-      suite=(
-        "kano_git_cli_tests|[cli]"
-      )
-    else
-      suite=(
-        "kano_git_tui_tests|[unit],[property]"
-      )
+    case "${KANO_CPP_INFRA_PGO_GATHER_QUICK_SUITE:-}" in
+      cli)
+        suite=(
+          "kano_git_cli_tests|[cli]"
+        )
+        ;;
+      tui)
+        suite=(
+          "kano_git_tui_tests|[unit],[property]"
+        )
+        ;;
+      *)
+        if [[ "$host_name" == "Darwin" ]]; then
+          suite=(
+            "kano_git_cli_tests|[cli]"
+          )
+        else
+          suite=(
+            "kano_git_tui_tests|[unit],[property]"
+          )
+        fi
+        ;;
+    esac
+    if [[ -n "${KANO_CPP_INFRA_PGO_GATHER_QUICK_SUITE:-}" ]]; then
+      echo "[pgo-gather] quick suite override: ${KANO_CPP_INFRA_PGO_GATHER_QUICK_SUITE}" >&2
     fi
   fi
 

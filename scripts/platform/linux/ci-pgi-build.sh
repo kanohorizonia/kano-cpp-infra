@@ -9,6 +9,7 @@ source "$SCRIPT_DIR/../../lib/linux_ci_runner.sh"
 
 export KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-linux-ninja-clang-pgo-collect}"
 export KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-linux-ninja-clang-pgo-collect-debug}"
+export KANO_CPP_INFRA_PGO_COLLECT_BUILD_TARGETS="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_TARGETS:-kano_git_cli_tests}"
 
 if ! kano_cpp_linux_ci_is_linux_host; then
   kano_cpp_linux_ci_exec_via_docker "$REPO_SCRIPT" "$@"
