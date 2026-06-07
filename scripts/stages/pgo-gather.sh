@@ -55,6 +55,35 @@ resolve_python_bin() {
 
 PYTHON_BIN="$(resolve_python_bin)"
 
+cmake_preset_exists() {
+  local preset_name="$1"
+  [[ -f "$CPP_ROOT/CMakePresets.json" ]] || return 1
+  "$PYTHON_BIN" - "$CPP_ROOT/CMakePresets.json" "$preset_name" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+name = sys.argv[2]
+data = json.loads(path.read_text(encoding="utf-8"))
+presets = []
+for section in ("configurePresets", "buildPresets"):
+    presets.extend(str(item.get("name", "")) for item in data.get(section, []))
+raise SystemExit(0 if name in presets else 1)
+PY
+}
+
+first_existing_preset() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -n "$candidate" ]] && cmake_preset_exists "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 resolve_test_skill_root() {
   local candidate skill_from_adapter
   local -a candidates=(
@@ -259,6 +288,9 @@ PY
 
 resolve_collect_preset() {
   local gather_mode="${KANO_CPP_INFRA_PGO_GATHER_MODE:-pgo}"
+  local host_name host_arch preset
+  host_name="$(uname -s 2>/dev/null || true)"
+  host_arch="$(uname -m 2>/dev/null || true)"
   
   if [[ -n "${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-}" ]]; then
     printf '%s\n' "$KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET"
@@ -267,28 +299,61 @@ resolve_collect_preset() {
 
   if [[ "$gather_mode" == "coverage" ]]; then
     # Use coverage presets to gather data (unified with PGO collect for comprehensive testing)
-    if [[ "$(uname -s 2>/dev/null || true)" == MINGW* || "$(uname -s 2>/dev/null || true)" == MSYS* || "$(uname -s 2>/dev/null || true)" == CYGWIN* ]]; then
+    if [[ "$host_name" == MINGW* || "$host_name" == MSYS* || "$host_name" == CYGWIN* ]]; then
       printf '%s\n' "windows-ninja-msvc-coverage"
       return 0
-    elif [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
-      if [[ "$(uname -m 2>/dev/null || true)" == "arm64" ]]; then
-        printf '%s\n' "macos-ninja-clang-arm64-coverage"
+    elif [[ "$host_name" == "Darwin" ]]; then
+      if [[ "$host_arch" == "arm64" || "$host_arch" == "aarch64" ]]; then
+        if preset="$(first_existing_preset macos-ninja-clang-arm64-coverage macos-ninja-clang-coverage macos-ninja-clang-arm64 macos-ninja-clang)"; then
+          printf '%s\n' "$preset"
+        else
+          printf '%s\n' "macos-ninja-clang-arm64-coverage"
+        fi
       else
-        printf '%s\n' "macos-ninja-clang-x64-coverage"
+        if preset="$(first_existing_preset macos-ninja-clang-x64-coverage macos-ninja-clang-coverage macos-ninja-clang-x64 macos-ninja-clang)"; then
+          printf '%s\n' "$preset"
+        else
+          printf '%s\n' "macos-ninja-clang-coverage"
+        fi
       fi
       return 0
     fi
-    printf '%s\n' "linux-ninja-clang-coverage"
+    if preset="$(first_existing_preset linux-ninja-clang-coverage linux-ninja-gcc-coverage linux-ninja-clang linux-ninja-gcc)"; then
+      printf '%s\n' "$preset"
+    else
+      printf '%s\n' "linux-ninja-clang-coverage"
+    fi
     return 0
   fi
 
   # Default: PGO collect mode
-  if [[ "$(uname -s 2>/dev/null || true)" == MINGW* || "$(uname -s 2>/dev/null || true)" == MSYS* || "$(uname -s 2>/dev/null || true)" == CYGWIN* ]]; then
+  if [[ "$host_name" == MINGW* || "$host_name" == MSYS* || "$host_name" == CYGWIN* ]]; then
     printf '%s\n' "windows-ninja-msvc-pgo-collect"
     return 0
   fi
 
-  printf '%s\n' "linux-ninja-gcc-pgo-collect"
+  if [[ "$host_name" == "Darwin" ]]; then
+    if [[ "$host_arch" == "arm64" || "$host_arch" == "aarch64" ]]; then
+      if preset="$(first_existing_preset macos-ninja-clang-arm64-pgo-collect macos-ninja-clang-pgo-collect macos-ninja-clang-arm64 macos-ninja-clang)"; then
+        printf '%s\n' "$preset"
+      else
+        printf '%s\n' "macos-ninja-clang-arm64-pgo-collect"
+      fi
+    else
+      if preset="$(first_existing_preset macos-ninja-clang-x64-pgo-collect macos-ninja-clang-pgo-collect macos-ninja-clang-x64 macos-ninja-clang)"; then
+        printf '%s\n' "$preset"
+      else
+        printf '%s\n' "macos-ninja-clang-pgo-collect"
+      fi
+    fi
+    return 0
+  fi
+
+  if preset="$(first_existing_preset linux-ninja-gcc-pgo-collect linux-ninja-gcc linux-ninja-clang-pgo-collect linux-ninja-clang)"; then
+    printf '%s\n' "$preset"
+  else
+    printf '%s\n' "linux-ninja-gcc-pgo-collect"
+  fi
 }
 
 is_windows_host() {

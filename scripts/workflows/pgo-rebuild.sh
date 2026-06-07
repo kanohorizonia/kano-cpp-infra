@@ -64,6 +64,7 @@ PY
 
 cmake_preset_exists() {
   local preset_name="$1"
+  [[ -f "$CPP_ROOT/CMakePresets.json" ]] || return 1
   "$PYTHON_BIN" - "$CPP_ROOT/CMakePresets.json" "$preset_name" <<'PY'
 import json
 import sys
@@ -106,9 +107,9 @@ default_coverage_configure_preset() {
     first_existing_preset windows-ninja-msvc-coverage windows-ninja-msvc
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-coverage macos-ninja-clang-arm64 macos-ninja-clang-coverage macos-ninja-clang
+      first_existing_preset macos-ninja-clang-arm64-coverage macos-ninja-clang-coverage macos-ninja-clang-arm64 macos-ninja-clang
     else
-      first_existing_preset macos-ninja-clang-x64-coverage macos-ninja-clang-x64 macos-ninja-clang-coverage macos-ninja-clang
+      first_existing_preset macos-ninja-clang-x64-coverage macos-ninja-clang-coverage macos-ninja-clang-x64 macos-ninja-clang
     fi
   else
     first_existing_preset linux-ninja-clang-coverage linux-ninja-gcc-coverage linux-ninja-clang linux-ninja-gcc
@@ -120,9 +121,9 @@ default_coverage_build_preset() {
     first_existing_preset windows-ninja-msvc-coverage-debug windows-ninja-msvc-debug
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-coverage-debug macos-ninja-clang-arm64-debug macos-ninja-clang-coverage-debug macos-ninja-clang-debug
+      first_existing_preset macos-ninja-clang-arm64-coverage-debug macos-ninja-clang-coverage-debug macos-ninja-clang-arm64-debug macos-ninja-clang-debug
     else
-      first_existing_preset macos-ninja-clang-x64-coverage-debug macos-ninja-clang-x64-debug macos-ninja-clang-coverage-debug macos-ninja-clang-debug
+      first_existing_preset macos-ninja-clang-x64-coverage-debug macos-ninja-clang-coverage-debug macos-ninja-clang-x64-debug macos-ninja-clang-debug
     fi
   else
     first_existing_preset linux-ninja-clang-coverage-debug linux-ninja-gcc-coverage-debug linux-ninja-clang-debug linux-ninja-gcc-debug
@@ -134,9 +135,9 @@ default_collect_configure_preset() {
     first_existing_preset windows-ninja-msvc-pgo-collect windows-ninja-msvc windows-ninja-clang-pgo-collect windows-ninja-clang
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-pgo-collect macos-ninja-clang-arm64 macos-ninja-clang-pgo-collect macos-ninja-clang
+      first_existing_preset macos-ninja-clang-arm64-pgo-collect macos-ninja-clang-pgo-collect macos-ninja-clang-arm64 macos-ninja-clang
     else
-      first_existing_preset macos-ninja-clang-x64-pgo-collect macos-ninja-clang-x64 macos-ninja-clang-pgo-collect macos-ninja-clang
+      first_existing_preset macos-ninja-clang-x64-pgo-collect macos-ninja-clang-pgo-collect macos-ninja-clang-x64 macos-ninja-clang
     fi
   else
     first_existing_preset linux-ninja-gcc-pgo-collect linux-ninja-gcc linux-ninja-clang-pgo-collect linux-ninja-clang
@@ -148,9 +149,9 @@ default_collect_build_preset() {
     first_existing_preset windows-ninja-msvc-pgo-collect-debug windows-ninja-msvc-debug windows-ninja-clang-pgo-collect-debug windows-ninja-clang-debug
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-pgo-collect-debug macos-ninja-clang-arm64-debug macos-ninja-clang-pgo-collect-debug macos-ninja-clang-debug
+      first_existing_preset macos-ninja-clang-arm64-pgo-collect-debug macos-ninja-clang-pgo-collect-debug macos-ninja-clang-arm64-debug macos-ninja-clang-debug
     else
-      first_existing_preset macos-ninja-clang-x64-pgo-collect-debug macos-ninja-clang-x64-debug macos-ninja-clang-pgo-collect-debug macos-ninja-clang-debug
+      first_existing_preset macos-ninja-clang-x64-pgo-collect-debug macos-ninja-clang-pgo-collect-debug macos-ninja-clang-x64-debug macos-ninja-clang-debug
     fi
   else
     first_existing_preset linux-ninja-gcc-pgo-collect-debug linux-ninja-gcc-debug linux-ninja-clang-pgo-collect-debug linux-ninja-clang-debug
@@ -162,9 +163,9 @@ default_use_configure_preset() {
     first_existing_preset windows-ninja-msvc-pgo-use windows-ninja-msvc windows-ninja-clang-pgo-use windows-ninja-clang
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-pgo-use macos-ninja-clang-arm64 macos-ninja-clang-pgo-use macos-ninja-clang
+      first_existing_preset macos-ninja-clang-arm64-pgo-use macos-ninja-clang-pgo-use macos-ninja-clang-arm64 macos-ninja-clang
     else
-      first_existing_preset macos-ninja-clang-x64-pgo-use macos-ninja-clang-x64 macos-ninja-clang-pgo-use macos-ninja-clang
+      first_existing_preset macos-ninja-clang-x64-pgo-use macos-ninja-clang-pgo-use macos-ninja-clang-x64 macos-ninja-clang
     fi
   else
     first_existing_preset linux-ninja-gcc-pgo-use linux-ninja-gcc linux-ninja-clang-pgo-use linux-ninja-clang
@@ -176,9 +177,9 @@ default_use_build_preset() {
     first_existing_preset windows-ninja-msvc-pgo-use-release windows-ninja-msvc-release windows-ninja-clang-pgo-use-release windows-ninja-clang-release
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-pgo-use-release macos-ninja-clang-arm64-release macos-ninja-clang-pgo-use-release macos-ninja-clang-release
+      first_existing_preset macos-ninja-clang-arm64-pgo-use-release macos-ninja-clang-pgo-use-release macos-ninja-clang-arm64-release macos-ninja-clang-release
     else
-      first_existing_preset macos-ninja-clang-x64-pgo-use-release macos-ninja-clang-x64-release macos-ninja-clang-pgo-use-release macos-ninja-clang-release
+      first_existing_preset macos-ninja-clang-x64-pgo-use-release macos-ninja-clang-pgo-use-release macos-ninja-clang-x64-release macos-ninja-clang-release
     fi
   else
     first_existing_preset linux-ninja-gcc-pgo-use-release linux-ninja-gcc-release linux-ninja-clang-pgo-use-release linux-ninja-clang-release
@@ -449,6 +450,7 @@ main() {
   resolve_profile_manifest
 
   if [[ "$stage" == "profile-gather" ]]; then
+    prepare_pgo_collect_environment
     run_gather_stage
     return 0
   fi
