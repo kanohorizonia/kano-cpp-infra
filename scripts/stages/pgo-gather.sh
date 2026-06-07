@@ -34,6 +34,27 @@ if [[ -f "$REPORT_SKILL_ADAPTER_SH" ]]; then
   source "$REPORT_SKILL_ADAPTER_SH"
 fi
 
+resolve_python_bin() {
+  if [[ -n "${KANO_PYTHON:-}" ]]; then
+    printf '%s\n' "$KANO_PYTHON"
+    return 0
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    command -v python3
+    return 0
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    command -v python
+    return 0
+  fi
+
+  printf '%s\n' "python"
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 resolve_test_skill_root() {
   local candidate skill_from_adapter
   local -a candidates=(
@@ -106,7 +127,7 @@ dump_cobertura_debug_summary() {
     fi
   fi
 
-  python - "$raw_dir" "$out_file" <<'PY'
+  "$PYTHON_BIN" - "$raw_dir" "$out_file" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -138,7 +159,7 @@ PY
 
 count_nonempty_cobertura_files() {
   local raw_dir="$1"
-  python - "$raw_dir" <<'PY'
+  "$PYTHON_BIN" - "$raw_dir" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -175,7 +196,7 @@ salvage_windows_opencppcoverage_for_tui() {
   local cov_lines_valid="0"
 
   _cov_lines_valid() {
-    python - "$1" <<'PY'
+    "$PYTHON_BIN" - "$1" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
@@ -573,7 +594,7 @@ generate_llvm_coverage_html() {
     [[ -f "$b" ]] && export_args+=(--object="$b")
   done
   if llvm-cov export "${export_args[@]}" > "$llvm_json" 2>/dev/null; then
-    python "$SCRIPT_DIR/../lib/llvm_json_to_cobertura.py" "$llvm_json" "$CPP_ROOT" "$cobertura_out" 2>/dev/null || true
+    "$PYTHON_BIN" "$SCRIPT_DIR/../lib/llvm_json_to_cobertura.py" "$llvm_json" "$CPP_ROOT" "$cobertura_out" 2>/dev/null || true
   fi
 }
 
@@ -601,7 +622,7 @@ generate_coverage_html() {
   local -a nonempty_xml_files=()
   local xml
   for xml in "${xml_files[@]}"; do
-    if python - "$xml" <<'PY'
+    if "$PYTHON_BIN" - "$xml" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
@@ -656,7 +677,7 @@ HTML
   local skill_root best_xml
   skill_root="$(resolve_test_skill_root 2>/dev/null || true)"
   if [[ -n "$skill_root" ]] && [[ -f "$skill_root/src/shell/reports/common/render_coverage_report.py" ]]; then
-    best_xml="$(python - "${nonempty_xml_files[@]}" <<'PY'
+    best_xml="$("$PYTHON_BIN" - "${nonempty_xml_files[@]}" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
@@ -677,7 +698,7 @@ PY
 )"
     if [[ -n "$best_xml" ]]; then
       echo "[pgo-gather] rendering coverage HTML with kano-cpp-test-skill renderer: $best_xml" >&2
-      if python "$skill_root/src/shell/reports/common/render_coverage_report.py" "$best_xml" "$html_dir" "$CPP_ROOT"; then
+      if "$PYTHON_BIN" "$skill_root/src/shell/reports/common/render_coverage_report.py" "$best_xml" "$html_dir" "$CPP_ROOT"; then
         echo "[pgo-gather] coverage HTML: $html_dir/index.html" >&2
         return 0
       fi
@@ -884,7 +905,7 @@ _render_junit_html_reports_fallback() {
 
   mkdir -p "$html_root"
 
-  python - "$in_reports_dir" "$html_root" <<'PY'
+  "$PYTHON_BIN" - "$in_reports_dir" "$html_root" <<'PY'
 from __future__ import annotations
 
 import html
@@ -968,7 +989,7 @@ render_junit_html_reports() {
   local tmp_result_dir="$reports_root/raw/.tmp-test-result"
   mkdir -p "$tmp_result_dir" "$html_root" "$reports_root/raw"
 
-  python - "$in_reports_dir" "$tmp_result_dir/ctest-report.xml" <<'PY'
+  "$PYTHON_BIN" - "$in_reports_dir" "$tmp_result_dir/ctest-report.xml" <<'PY'
 from __future__ import annotations
 
 import sys
@@ -1088,7 +1109,7 @@ PY
 
   if ! KANO_TEST_XML="$tmp_result_dir/ctest-report.xml" \
     KANO_COVERAGE_XML="$coverage_xml" \
-    python "$skill_root/src/shell/reports/common/kano-cpp-report-adapter" \
+    "$PYTHON_BIN" "$skill_root/src/shell/reports/common/kano-cpp-report-adapter" \
       --report-root "$reports_root" \
       --slug "pgo-gather" \
       --title "PGO Gather Feature Report" \
@@ -1098,7 +1119,7 @@ PY
     return
   fi
 
-  if ! python "$skill_root/src/shell/reports/common/kano-report-site-renderer" \
+  if ! "$PYTHON_BIN" "$skill_root/src/shell/reports/common/kano-report-site-renderer" \
     "$reports_root/raw/kano-report-site-v1.json" \
     "$html_root"; then
     echo "[pgo-gather] warning: skill site renderer failed; using fallback html renderer" >&2
@@ -1115,7 +1136,7 @@ render_reports_homepage() {
 
   mkdir -p "$reports_root"
 
-  python - "$reports_root" "$html_dir" "$coverage_html_dir" "$reports_dir" "$logs_dir" "${KANO_CPP_INFRA_COVERAGE_TOOL:-none}" "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" <<'PY'
+  "$PYTHON_BIN" - "$reports_root" "$html_dir" "$coverage_html_dir" "$reports_dir" "$logs_dir" "${KANO_CPP_INFRA_COVERAGE_TOOL:-none}" "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" <<'PY'
 from __future__ import annotations
 
 import datetime as dt
