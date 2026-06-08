@@ -537,6 +537,56 @@ kano_cpp_linux_ci_pick_coverage_xml() {
   return 1
 }
 
+kano_cpp_linux_ci_normalize_cobertura_for_jenkins() {
+  local source_xml="${1:?source xml is required}"
+  local target_xml="${2:?target xml is required}"
+  local python_cmd=""
+
+  python_cmd="$(kano_cpp_linux_ci_python)" || return 1
+  mkdir -p "$(dirname "$target_xml")"
+
+  "$python_cmd" - "$source_xml" "$target_xml" <<'PY'
+from __future__ import annotations
+
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import PurePosixPath
+
+source_xml, target_xml = sys.argv[1], sys.argv[2]
+tree = ET.parse(source_xml)
+root = tree.getroot()
+
+sources = root.find("sources")
+if sources is None:
+    sources = ET.SubElement(root, "sources")
+for child in list(sources):
+    sources.remove(child)
+ET.SubElement(sources, "source").text = "."
+
+def normalize_filename(value: str) -> str:
+    path = value.replace("\\", "/")
+    lowered = path.lower()
+    markers = ("/src/cpp/", "/work/src/cpp/")
+    for marker in markers:
+        index = lowered.find(marker)
+        if index >= 0:
+            path = "src/cpp/" + path[index + len(marker):].lstrip("/")
+            break
+    if path.startswith("code/"):
+        path = f"src/cpp/{path}"
+    if path.startswith("./"):
+        path = path[2:]
+    return str(PurePosixPath(path))
+
+for class_node in root.findall(".//class"):
+    filename = class_node.attrib.get("filename", "")
+    if filename:
+        class_node.set("filename", normalize_filename(filename))
+
+tree.write(target_xml, encoding="utf-8", xml_declaration=True)
+PY
+}
+
 kano_cpp_linux_ci_copy_tree() {
   local source_dir="${1:?source dir is required}"
   local target_dir="${2:?target dir is required}"
@@ -617,8 +667,7 @@ kano_cpp_linux_ci_canonicalize_gather_reports() {
 
   coverage_xml="$(kano_cpp_linux_ci_pick_coverage_xml "$raw_coverage_dir" || true)"
   if [[ -n "$coverage_xml" ]]; then
-    mkdir -p "$(dirname "$KANO_COVERAGE_XML")"
-    cp -f "$coverage_xml" "$KANO_COVERAGE_XML"
+    kano_cpp_linux_ci_normalize_cobertura_for_jenkins "$coverage_xml" "$KANO_COVERAGE_XML"
   fi
   if [[ -d "$html_dir" ]]; then
     kano_cpp_linux_ci_copy_tree "$html_dir" "$KANO_COVERAGE_HTML_DIR"
