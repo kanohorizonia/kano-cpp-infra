@@ -338,6 +338,56 @@ except Exception:
 PY
 }
 
+coverage_normalize_cobertura_for_jenkins() {
+    local source_xml="$1"
+    local target_xml="${2:-$1}"
+    local python_bin
+
+    [[ -f "$source_xml" ]] || return 0
+    python_bin="$(coverage_resolve_python_bin)" || return 1
+    mkdir -p "$(dirname "$target_xml")"
+    kano_python "$python_bin" - "$source_xml" "$target_xml" <<'PY'
+from __future__ import annotations
+
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import PurePosixPath
+
+source_xml, target_xml = sys.argv[1], sys.argv[2]
+tree = ET.parse(source_xml)
+root = tree.getroot()
+
+sources = root.find("sources")
+if sources is None:
+    sources = ET.SubElement(root, "sources")
+for child in list(sources):
+    sources.remove(child)
+ET.SubElement(sources, "source").text = "."
+
+def normalize_filename(value: str) -> str:
+    path = value.replace("\\", "/")
+    lowered = path.lower()
+    markers = ("/src/cpp/", "src/cpp/", "/work/src/cpp/")
+    for marker in markers:
+        index = lowered.find(marker)
+        if index >= 0:
+            path = "src/cpp/" + path[index + len(marker):].lstrip("/")
+            break
+    if path.startswith("code/"):
+        path = f"src/cpp/{path}"
+    if path.startswith("./"):
+        path = path[2:]
+    return str(PurePosixPath(path))
+
+for class_node in root.findall(".//class"):
+    filename = class_node.attrib.get("filename", "")
+    if filename:
+        class_node.set("filename", normalize_filename(filename))
+
+tree.write(target_xml, encoding="utf-8", xml_declaration=True)
+PY
+}
+
 coverage_render_fallback_cobertura_html() {
     local cobertura_xml="$1"
     local output_dir="$2"
@@ -476,6 +526,7 @@ coverage_run_windows_opencppcoverage() {
             --order lex --rng-seed 1337 --durations yes \
         >"$log_file" 2>&1
 
+    coverage_normalize_cobertura_for_jenkins "$cobertura_xml" "$cobertura_xml"
     lines_valid="$(coverage_cobertura_lines_valid "$cobertura_xml")"
     if [[ "$lines_valid" -le 0 ]]; then
         echo "[coverage_run_tests] WARNING: OpenCppCoverage produced empty Cobertura XML. See $log_file" >&2
