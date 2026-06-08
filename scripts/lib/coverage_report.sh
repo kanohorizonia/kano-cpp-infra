@@ -21,6 +21,8 @@ INF_CPP_ROOT_DEFAULT="$(cd -- "$SCRIPT_DIR/../../../.." && pwd)"
 source "$SCRIPT_DIR/docker_host.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/matrix.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/report_skill_adapter.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Coverage directories
@@ -280,6 +282,157 @@ EOF
     echo "[coverage_report] Status artifact: $INF_COVERAGE_ROOT/coverage-status.json"
 }
 
+coverage_resolve_python_bin() {
+    if command -v python3 >/dev/null 2>&1; then
+        command -v python3
+        return 0
+    fi
+    if command -v python >/dev/null 2>&1; then
+        command -v python
+        return 0
+    fi
+    return 1
+}
+
+coverage_to_windows_path() {
+    local value="${1:-}"
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$value"
+        return 0
+    fi
+    printf '%s\n' "$value"
+}
+
+coverage_resolve_opencppcoverage() {
+    if command -v OpenCppCoverage >/dev/null 2>&1; then
+        command -v OpenCppCoverage
+        return 0
+    fi
+    if command -v OpenCppCoverage.exe >/dev/null 2>&1; then
+        command -v OpenCppCoverage.exe
+        return 0
+    fi
+    if [[ -x "/c/Program Files/OpenCppCoverage/OpenCppCoverage.exe" ]]; then
+        printf '%s\n' "/c/Program Files/OpenCppCoverage/OpenCppCoverage.exe"
+        return 0
+    fi
+    if [[ -x "/c/Program Files/OpenCppCoverage/OpenCppCoverage" ]]; then
+        printf '%s\n' "/c/Program Files/OpenCppCoverage/OpenCppCoverage"
+        return 0
+    fi
+    return 1
+}
+
+coverage_is_windows_preset() {
+    local preset="${1:-}"
+    _is_windows && [[ "$preset" == windows-* ]]
+}
+
+coverage_cobertura_lines_valid() {
+    local xml_file="$1"
+    local python_bin
+    python_bin="$(coverage_resolve_python_bin)" || return 1
+    "$python_bin" - "$xml_file" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+try:
+    root = ET.parse(sys.argv[1]).getroot()
+    print(int(root.attrib.get("lines-valid", "0") or "0"))
+except Exception:
+    print(0)
+PY
+}
+
+coverage_run_windows_opencppcoverage() {
+    local preset="$1"
+    local test_binary="$2"
+    local cpp_root binary_path occ_bin source_root cobertura_xml
+    local source_win binary_win cobertura_win log_file lines_valid
+
+    cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
+    binary_path="$(coverage_resolve_binary_path "$preset" "$test_binary" || true)"
+    if [[ ! -f "$binary_path" ]]; then
+        echo "[coverage_run_tests] ERROR: Binary not found: $binary_path" >&2
+        return 1
+    fi
+    occ_bin="$(coverage_resolve_opencppcoverage)" || {
+        echo "[coverage_run_tests] ERROR: OpenCppCoverage not found." >&2
+        return 1
+    }
+
+    source_root="${KANO_COVERAGE_SOURCE_ROOT:-$cpp_root/code}"
+    cobertura_xml="$INF_COVERAGE_ROOT/cobertura.xml"
+    log_file="$INF_COVERAGE_ROOT/opencppcoverage.log"
+
+    mkdir -p "$INF_COVERAGE_ROOT"
+    rm -f "$cobertura_xml" "$log_file"
+
+    source_win="$(coverage_to_windows_path "$source_root")"
+    binary_win="$(coverage_to_windows_path "$binary_path")"
+    cobertura_win="$(coverage_to_windows_path "$cobertura_xml")"
+
+    echo "[coverage_run_tests] Windows OpenCppCoverage binary: $binary_path"
+    echo "[coverage_run_tests] Windows OpenCppCoverage source root: $source_root"
+    echo "[coverage_run_tests] Windows OpenCppCoverage XML: $cobertura_xml"
+
+    MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
+        --sources "$source_win" \
+        --cover_children \
+        --export_type "cobertura:$cobertura_win" \
+        --quiet \
+        -- "$binary_win" \
+            --order lex --rng-seed 1337 --durations yes \
+        >"$log_file" 2>&1
+
+    lines_valid="$(coverage_cobertura_lines_valid "$cobertura_xml")"
+    if [[ "$lines_valid" -le 0 ]]; then
+        echo "[coverage_run_tests] WARNING: OpenCppCoverage produced empty Cobertura XML. See $log_file" >&2
+        coverage_write_status "UNAVAILABLE" "EMPTY_COBERTURA" "$cobertura_xml"
+        return 0
+    fi
+
+    coverage_write_status "VALID" "COBERTURA_READY" "$cobertura_xml"
+    echo "[coverage_run_tests] OpenCppCoverage Cobertura ready: $cobertura_xml (lines-valid=$lines_valid)"
+}
+
+coverage_render_cobertura_html() {
+    local cobertura_xml="$1"
+    local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
+    local lines_valid python_bin skill_root renderer
+
+    if [[ ! -f "$cobertura_xml" ]]; then
+        echo "[coverage_report] WARNING: Cobertura XML not found: $cobertura_xml" >&2
+        coverage_write_status "UNAVAILABLE" "MISSING_COBERTURA" "$cobertura_xml"
+        return 0
+    fi
+
+    lines_valid="$(coverage_cobertura_lines_valid "$cobertura_xml")"
+    if [[ "$lines_valid" -le 0 ]]; then
+        echo "[coverage_report] WARNING: Cobertura XML has no valid lines: $cobertura_xml" >&2
+        coverage_write_status "UNAVAILABLE" "EMPTY_COBERTURA" "$cobertura_xml"
+        return 0
+    fi
+
+    python_bin="$(coverage_resolve_python_bin)" || {
+        echo "[coverage_report] ERROR: python is required to render Cobertura HTML." >&2
+        coverage_write_status "TOOL_FAILED" "PYTHON_NOT_FOUND" "python"
+        return 1
+    }
+    skill_root="$(report_skill_find_root "$(cd -- "$cpp_root/../.." >/dev/null 2>&1 && pwd)" 2>/dev/null || true)"
+    renderer="$skill_root/src/shell/reports/common/render_coverage_report.py"
+    if [[ -z "$skill_root" || ! -f "$renderer" ]]; then
+        echo "[coverage_report] ERROR: kano-cpp-test-skill coverage renderer not found." >&2
+        coverage_write_status "TOOL_FAILED" "COVERAGE_RENDERER_NOT_FOUND" "$renderer"
+        return 1
+    fi
+
+    mkdir -p "$INF_COVERAGE_HTML_DIR"
+    "$python_bin" "$renderer" "$cobertura_xml" "$INF_COVERAGE_HTML_DIR" "$cpp_root"
+    coverage_write_status "VALID" "HTML_READY" "$INF_COVERAGE_HTML_DIR/index.html"
+    echo "[coverage_report] Cobertura HTML report: $INF_COVERAGE_HTML_DIR/index.html"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # coverage_build - Build with coverage instrumentation
 # ─────────────────────────────────────────────────────────────────────────────
@@ -494,6 +647,11 @@ coverage_run_tests() {
         test_binary="$(coverage_default_test_binary "$platform")"
     fi
 
+    if coverage_is_windows_preset "$preset"; then
+        coverage_run_windows_opencppcoverage "$preset" "$test_binary"
+        return
+    fi
+
     local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
     local binary_path=""
     binary_path="$(coverage_resolve_binary_path "$preset" "$test_binary" || true)"
@@ -543,6 +701,13 @@ coverage_merge() {
     echo "[coverage_merge] LLVM-cov path: ${llvm_cov_path:-not found}"
 
     coverage_ensure_dirs
+
+    if coverage_is_windows_preset "$(coverage_default_configure_preset || true)"; then
+        if [[ -f "$INF_COVERAGE_ROOT/cobertura.xml" ]]; then
+            echo "[coverage_merge] Windows Cobertura coverage is already normalized: $INF_COVERAGE_ROOT/cobertura.xml"
+            return 0
+        fi
+    fi
 
     if [[ "$compiler_id" == "Clang" ]]; then
         local llvm_profdata
@@ -622,6 +787,11 @@ coverage_report() {
         echo "[coverage_report] WARNING: Binary not found: $binary_path" >&2
         coverage_write_status "UNAVAILABLE" "NO_INSTRUMENTED_BINARIES" "$binary_path"
         return 0
+    fi
+
+    if coverage_is_windows_preset "$preset"; then
+        coverage_render_cobertura_html "$INF_COVERAGE_ROOT/cobertura.xml"
+        return
     fi
 
     if [[ ! -f "$INF_COVERAGE_PROFDATA" ]]; then
