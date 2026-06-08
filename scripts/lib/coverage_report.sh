@@ -23,6 +23,8 @@ source "$SCRIPT_DIR/docker_host.sh"
 source "$SCRIPT_DIR/matrix.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/report_skill_adapter.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/python_resolver.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Coverage directories
@@ -283,15 +285,7 @@ EOF
 }
 
 coverage_resolve_python_bin() {
-    if command -v python3 >/dev/null 2>&1; then
-        command -v python3
-        return 0
-    fi
-    if command -v python >/dev/null 2>&1; then
-        command -v python
-        return 0
-    fi
-    return 1
+    kano_resolve_python_bin
 }
 
 coverage_to_windows_path() {
@@ -332,7 +326,7 @@ coverage_cobertura_lines_valid() {
     local xml_file="$1"
     local python_bin
     python_bin="$(coverage_resolve_python_bin)" || return 1
-    "$python_bin" - "$xml_file" <<'PY'
+    kano_python "$python_bin" - "$xml_file" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
 
@@ -341,6 +335,103 @@ try:
     print(int(root.attrib.get("lines-valid", "0") or "0"))
 except Exception:
     print(0)
+PY
+}
+
+coverage_render_fallback_cobertura_html() {
+    local cobertura_xml="$1"
+    local output_dir="$2"
+    local cpp_root="$3"
+    local python_bin
+
+    python_bin="$(coverage_resolve_python_bin)" || return 1
+    mkdir -p "$output_dir"
+    kano_python "$python_bin" - "$cobertura_xml" "$output_dir" "$cpp_root" <<'PY'
+import html
+import pathlib
+import sys
+import xml.etree.ElementTree as ET
+
+xml_path = pathlib.Path(sys.argv[1])
+out_dir = pathlib.Path(sys.argv[2])
+cpp_root = pathlib.Path(sys.argv[3])
+
+try:
+    root = ET.parse(xml_path).getroot()
+except Exception as exc:
+    (out_dir / "index.html").write_text(
+        "<!doctype html><html><head><meta charset='utf-8'><title>Coverage Report</title></head>"
+        f"<body><h1>Coverage Report</h1><p>Failed to parse Cobertura XML: {html.escape(str(exc))}</p></body></html>",
+        encoding="utf-8",
+    )
+    raise SystemExit(0)
+
+lines_valid = int(root.attrib.get("lines-valid", "0") or "0")
+lines_covered = int(root.attrib.get("lines-covered", "0") or "0")
+branches_valid = int(root.attrib.get("branches-valid", "0") or "0")
+branches_covered = int(root.attrib.get("branches-covered", "0") or "0")
+
+def pct(done: int, total: int) -> str:
+    return "n/a" if total <= 0 else f"{(done / total) * 100:.1f}%"
+
+rows = []
+for package in root.findall(".//package"):
+    for cls in package.findall(".//class"):
+        filename = cls.attrib.get("filename", "")
+        class_lines = cls.findall(".//line")
+        total = len(class_lines)
+        covered = sum(1 for line in class_lines if int(line.attrib.get("hits", "0") or "0") > 0)
+        rows.append((covered, total, filename))
+
+rows.sort(key=lambda item: (item[1] == 0, item[0] / item[1] if item[1] else 0, item[2]))
+row_html = "\n".join(
+    "<tr>"
+    f"<td>{html.escape(filename)}</td>"
+    f"<td>{covered}</td>"
+    f"<td>{total}</td>"
+    f"<td>{html.escape(pct(covered, total))}</td>"
+    "</tr>"
+    for covered, total, filename in rows[:200]
+)
+
+if not row_html:
+    row_html = "<tr><td colspan='4'>No class-level coverage entries were found.</td></tr>"
+
+(out_dir / "index.html").write_text(f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Coverage Report</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #24292f; }}
+    .summary {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; max-width: 960px; }}
+    .metric {{ border: 1px solid #d0d7de; border-radius: 8px; padding: 0.8rem 1rem; background: #f6f8fa; }}
+    .value {{ font-size: 1.5rem; font-weight: 650; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 1.5rem; }}
+    th, td {{ border: 1px solid #d0d7de; padding: 0.45rem 0.6rem; text-align: left; }}
+    th {{ background: #f6f8fa; }}
+    code {{ background: #f6f8fa; padding: 0.1rem 0.3rem; border-radius: 4px; }}
+  </style>
+</head>
+<body>
+  <h1>Coverage Report</h1>
+  <div class="summary">
+    <div class="metric"><div>Line Coverage</div><div class="value">{html.escape(pct(lines_covered, lines_valid))}</div><div>{lines_covered} / {lines_valid}</div></div>
+    <div class="metric"><div>Branch Coverage</div><div class="value">{html.escape(pct(branches_covered, branches_valid))}</div><div>{branches_covered} / {branches_valid}</div></div>
+    <div class="metric"><div>Classes</div><div class="value">{len(rows)}</div><div>from Cobertura XML</div></div>
+  </div>
+  <p>Cobertura XML: <code>{html.escape(str(xml_path))}</code></p>
+  <p>Source root: <code>{html.escape(str(cpp_root))}</code></p>
+  <h2>Lowest Coverage Files</h2>
+  <table>
+    <thead><tr><th>File</th><th>Covered</th><th>Total</th><th>Coverage</th></tr></thead>
+    <tbody>
+{row_html}
+    </tbody>
+  </table>
+</body>
+</html>
+""", encoding="utf-8")
 PY
 }
 
@@ -421,14 +512,17 @@ coverage_render_cobertura_html() {
     }
     skill_root="$(report_skill_find_root "$(cd -- "$cpp_root/../.." >/dev/null 2>&1 && pwd)" 2>/dev/null || true)"
     renderer="$skill_root/src/shell/reports/common/render_coverage_report.py"
-    if [[ -z "$skill_root" || ! -f "$renderer" ]]; then
-        echo "[coverage_report] ERROR: kano-cpp-test-skill coverage renderer not found." >&2
-        coverage_write_status "TOOL_FAILED" "COVERAGE_RENDERER_NOT_FOUND" "$renderer"
-        return 1
-    fi
 
     mkdir -p "$INF_COVERAGE_HTML_DIR"
-    "$python_bin" "$renderer" "$cobertura_xml" "$INF_COVERAGE_HTML_DIR" "$cpp_root"
+    if [[ -z "$skill_root" || ! -f "$renderer" ]]; then
+        echo "[coverage_report] WARNING: kano-cpp-test-skill coverage renderer not found; writing fallback coverage HTML." >&2
+        coverage_render_fallback_cobertura_html "$cobertura_xml" "$INF_COVERAGE_HTML_DIR" "$cpp_root"
+        coverage_write_status "VALID" "HTML_READY_FALLBACK" "$INF_COVERAGE_HTML_DIR/index.html"
+        echo "[coverage_report] Fallback Cobertura HTML report: $INF_COVERAGE_HTML_DIR/index.html"
+        return 0
+    fi
+
+    kano_python "$python_bin" "$renderer" "$cobertura_xml" "$INF_COVERAGE_HTML_DIR" "$cpp_root"
     coverage_write_status "VALID" "HTML_READY" "$INF_COVERAGE_HTML_DIR/index.html"
     echo "[coverage_report] Cobertura HTML report: $INF_COVERAGE_HTML_DIR/index.html"
 }
