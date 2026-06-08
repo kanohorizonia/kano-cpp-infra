@@ -306,7 +306,7 @@ run_collect_build() {
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$collect_cache_args"
   export INF_CMAKE_CACHE_ARGS_JSON="$collect_cache_args"
   if [[ -z "$collect_build_targets" && "$(uname -s 2>/dev/null || true)" == "Darwin" && "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
-    collect_build_targets="kano_git_cli_tests"
+    collect_build_targets="kano_git_tui_tests"
   fi
   if [[ -n "$collect_build_targets" ]]; then
     export KANO_CPP_INFRA_BUILD_TARGETS="$collect_build_targets"

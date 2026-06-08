@@ -1484,7 +1484,7 @@ run_collect_tests_default() {
       *)
         if [[ "$host_name" == "Darwin" ]]; then
           suite=(
-            "kano_git_cli_tests|[cli]"
+            "kano_git_tui_tests|[unit],[property]"
           )
         else
           suite=(
