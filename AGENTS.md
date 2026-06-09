@@ -2,23 +2,72 @@
 
 ## Role
 
-`kano-cpp-infra` is a code repo that provides reusable native runtime code to consuming Kano skills.
+`kano-cpp-infra` is the shared native C++ infrastructure repo for Kano command
+line tools and agent skills. Keep it generic, reusable, and suitable for future
+public release.
 
-## Ownership
+## Guardrails
 
-- Owner: Kano platform team
-- Mount path: `src/cpp/shared/infra` in consuming repos
-- Non-product-ownership caveat: consuming repos should update infra through the infra repo
+- Preserve existing user changes. Inspect `git status --short` before editing.
+- Do not commit secrets, tokens, private keys, machine-local paths, or internal
+  hostnames.
+- Do not hardcode developer user names, drive letters, Jenkins URLs, LAN
+  endpoints, or release credentials.
+- Keep consumer compatibility in mind. Changes here affect repos that mount this
+  repo at `src/cpp/shared/infra`.
+- Prefer existing scripts, CMake targets, and Pixi tasks over adding parallel
+  mechanisms.
+- Public-facing docs should explain concepts without relying on private context.
 
-## Layout
+## Repository Layout
 
-- `scripts/` contains build/config support such as CMake package files
-- `code/systems/` contains reusable infra modules
-- `code/apps/` and `code/tests/` are reserved for future aligned growth
+- `code/systems/` contains reusable infra modules.
+- `code/apps/` contains infra-owned helper CLIs.
+- `config/` contains shared build/test matrix data.
+- `scripts/cmake/` contains CMake package integration.
+- `scripts/lib/`, `scripts/platform/`, `scripts/stages/`, and
+  `scripts/workflows/` contain reusable build, test, coverage, report, and PGO
+  automation.
 
-## Adding New Modules
+## C++ Module Pattern
 
-1. Add `code/systems/kano_infra_<module>/public/kano_<module>.h`
-2. Add `code/systems/kano_infra_<module>/private/<module>_impl.cpp`
-3. Add module `CMakeLists.txt` in that system directory
-4. Update root `CMakeLists.txt` and this file
+When adding a reusable module:
+
+1. Add `code/systems/kano_infra_<module>/public/...` headers.
+2. Add `code/systems/kano_infra_<module>/private/...` implementation files.
+3. Add that module's `CMakeLists.txt`.
+4. Add the subdirectory and alias target in the root `CMakeLists.txt`.
+5. Link the module into `KanoInfra::All` only if it is safe as a default
+   dependency for consumers.
+6. Update README target lists and any consumer-facing examples.
+
+Use target names in the `KanoInfra::<name>` namespace. Keep include paths stable
+once published.
+
+## Validation
+
+Use the smallest validation that proves the change:
+
+```powershell
+pixi run env-summary
+pixi run build
+pixi run quick-test
+pixi run test-report
+pixi run coverage-all
+```
+
+For script-only changes, also run the relevant shell or PowerShell syntax checks
+when available. For public docs, check that examples do not expose private
+configuration and still match the current CMake/Pixi contract.
+
+## CI Credential Policy
+
+If a public consumer repo needs this private repository during transition, prefer
+the `kanohorizonia-jenkins` GitHub App through Actions variables/secrets:
+
+- `KANO_JENKINS_APP_CLIENT_ID`
+- `KANO_JENKINS_APP_PRIVATE_KEY`
+
+Scope generated installation tokens to only the repositories and permissions
+needed for the job. Do not replace this with a broad personal access token unless
+there is a documented temporary reason.
