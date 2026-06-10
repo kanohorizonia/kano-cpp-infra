@@ -201,7 +201,6 @@ Write-LauncherStatus -Step 'prerequisite' -Status 'start' -Message 'windows depe
 
 Ensure-WingetPackageUnlessCommandAvailable -Id 'Kitware.CMake' -CommandNames @('cmake')
 Ensure-WingetPackageUnlessCommandAvailable -Id 'Ninja-build.Ninja' -CommandNames @('ninja')
-Ensure-WingetPackageUnlessCommandAvailable -Id 'Python.Python.3.12' -CommandNames @('python', 'python3')
 
 Invoke-LauncherStep -Step 'prereq:Microsoft.VisualStudio.2022.BuildTools' -Action {
   $installerBusyCode = -1978334974

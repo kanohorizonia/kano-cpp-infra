@@ -288,49 +288,6 @@ kano_pixi_bootstrap_install_global_tools() {
     printf '[pixi-bootstrap] WARNING: pixi global install failed — continuing\n' >&2
   fi
 
-  # Parse pypi packages for this platform and install via pip
-  local pypi_packages=""
-  local in_target_pypi=false
-
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-
-    if [[ "$line" =~ ^\[target\.([^\]]+)\]$ ]]; then
-      local section="${BASH_REMATCH[1]}"
-      if [[ "$section" == "${platform}.pypi-dependencies" ]]; then
-        in_target_pypi=true
-      else
-        in_target_pypi=false
-      fi
-      continue
-    elif [[ "$line" =~ ^\[ ]]; then
-      in_target_pypi=false
-      continue
-    fi
-
-    [[ "$in_target_pypi" == false ]] && continue
-
-    if [[ "$line" =~ ^[[:space:]]*([a-zA-Z0-9_-]+)[[:space:]]*=[[:space:]]*[\"\'](.*)[\"\'] ]]; then
-      local pkg_name="${BASH_REMATCH[1]}"
-      if [[ "$pypi_packages" != *"$pkg_name"* ]]; then
-        pypi_packages="${pypi_packages} ${pkg_name}"
-      fi
-    fi
-  done < "$manifest_path"
-
-  pypi_packages="$(echo "$pypi_packages" | sed 's/^ //')"
-
-  if [[ -n "$pypi_packages" ]]; then
-    printf '[pixi-bootstrap] pypi packages: %s\n' "$pypi_packages" >&2
-    if command -v pip >/dev/null 2>&1; then
-      if ! pip install ${pypi_packages}; then
-        printf '[pixi-bootstrap] WARNING: pip install failed — continuing\n' >&2
-      fi
-    else
-      printf '[pixi-bootstrap] WARNING: pip not found — skipping pypi packages\n' >&2
-    fi
-  fi
-
   printf '[pixi-bootstrap] global tools install complete\n' >&2
   return 0
 }

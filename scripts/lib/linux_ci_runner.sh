@@ -14,6 +14,8 @@ export KANO_CPP_ROOT="${KANO_CPP_ROOT:-$KANO_CPP_LINUX_CI_CPP_ROOT}"
 
 # shellcheck disable=SC1091
 source "$KANO_CPP_LINUX_CI_LIB_DIR/docker_host.sh"
+# shellcheck disable=SC1091
+source "$KANO_CPP_LINUX_CI_LIB_DIR/native_tool.sh"
 
 kano_cpp_linux_ci_host_os() {
   uname -s 2>/dev/null || echo "unknown"
@@ -131,14 +133,7 @@ kano_cpp_linux_ci_hash_text() {
     printf '%s' "$input" | shasum -a 256 | awk '{print substr($1, 1, 12)}'
     return 0
   fi
-  python3 - "$input" <<'PY'
-from __future__ import annotations
-
-import hashlib
-import sys
-
-print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest()[:12])
-PY
+  printf '%s' "$input" | cksum | awk '{print substr($1, 1, 12)}'
 }
 
 kano_cpp_linux_ci_container_key_root() {
@@ -240,7 +235,7 @@ kano_cpp_linux_ci_exec_via_docker() {
     bash -lc '
 set -euo pipefail
 need_install=0
-for tool in bash cmake ninja git python3; do
+for tool in bash cmake ninja git; do
   command -v "$tool" >/dev/null 2>&1 || need_install=1
 done
 if (( need_install )); then
@@ -254,24 +249,10 @@ if (( need_install )); then
     clang \
     lld \
     llvm \
-    python3 \
     git
 fi
 exec bash "$1" "${@:2}"
 ' _ "/work/$repo_relative_script" "$@"
-}
-
-kano_cpp_linux_ci_python() {
-  if command -v python3 >/dev/null 2>&1; then
-    command -v python3
-    return 0
-  fi
-  if command -v python >/dev/null 2>&1; then
-    command -v python
-    return 0
-  fi
-  echo "python3 or python is required." >&2
-  return 1
 }
 
 kano_cpp_linux_ci_resolve_path() {
@@ -396,13 +377,11 @@ kano_cpp_linux_ci_generate_bdd_metadata() {
   local junit_xml="${1:?junit xml is required}"
   local metadata_dir="${2:?metadata dir is required}"
   local suite_name="${3:-kano_git_cli_tests}"
-  local python_cmd=""
 
   [[ -f "$junit_xml" ]] || return 0
 
-  python_cmd="$(kano_cpp_linux_ci_python)" || return 1
   mkdir -p "$metadata_dir"
-  "$python_cmd" "$KANO_CPP_LINUX_CI_INFRA_DIR/scripts/tools/generate-bdd-metadata-from-junit.py" \
+  kano_cpp_infra_tool generate-bdd-metadata \
     "$junit_xml" \
     "$metadata_dir" \
     "$suite_name"
@@ -411,112 +390,18 @@ kano_cpp_linux_ci_generate_bdd_metadata() {
 kano_cpp_linux_ci_merge_junit_dir() {
   local input_dir="${1:?input dir is required}"
   local output_xml="${2:?output xml is required}"
-  local python_cmd=""
 
-  python_cmd="$(kano_cpp_linux_ci_python)" || return 1
   mkdir -p "$(dirname "$output_xml")"
-  "$python_cmd" - "$input_dir" "$output_xml" <<'PY'
-from __future__ import annotations
-
-import sys
-import xml.etree.ElementTree as ET
-from pathlib import Path
-
-in_dir = Path(sys.argv[1])
-out_path = Path(sys.argv[2])
-root = ET.Element("testsuites")
-for xml_path in sorted(in_dir.glob("*.xml")):
-    try:
-        doc = ET.parse(xml_path).getroot()
-    except ET.ParseError:
-        continue
-    if doc.tag == "testsuite":
-        root.append(doc)
-    elif doc.tag == "testsuites":
-        for suite in doc.findall("testsuite"):
-            root.append(suite)
-
-out_path.parent.mkdir(parents=True, exist_ok=True)
-ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)
-PY
+  kano_cpp_infra_tool merge-junit-dir "$input_dir" "$output_xml"
 }
 
 kano_cpp_linux_ci_write_gather_summary_junit() {
   local reports_root="${1:?reports root is required}"
   local input_dir="${2:?input dir is required}"
   local output_xml="${3:?output xml is required}"
-  local python_cmd=""
 
-  python_cmd="$(kano_cpp_linux_ci_python)" || return 1
   mkdir -p "$(dirname "$output_xml")"
-  "$python_cmd" - "$reports_root" "$input_dir" "$output_xml" <<'PY'
-from __future__ import annotations
-
-import sys
-import xml.etree.ElementTree as ET
-from pathlib import Path
-
-reports_root = Path(sys.argv[1])
-input_dir = Path(sys.argv[2])
-out_path = Path(sys.argv[3])
-
-raw_suites = 0
-raw_tests = 0
-raw_failures = 0
-raw_errors = 0
-raw_skipped = 0
-raw_files = 0
-
-for xml_path in sorted(input_dir.glob("*.xml")):
-    try:
-        doc = ET.parse(xml_path).getroot()
-    except ET.ParseError:
-        continue
-    raw_files += 1
-    suites = []
-    if doc.tag == "testsuite":
-        suites = [doc]
-    elif doc.tag == "testsuites":
-        suites = list(doc.findall("testsuite"))
-    for suite in suites:
-        raw_suites += 1
-        raw_tests += int(suite.attrib.get("tests", "0") or "0")
-        raw_failures += int(suite.attrib.get("failures", "0") or "0")
-        raw_errors += int(suite.attrib.get("errors", "0") or "0")
-        raw_skipped += int(suite.attrib.get("skipped", "0") or "0")
-
-root = ET.Element("testsuites")
-suite = ET.SubElement(
-    root,
-    "testsuite",
-    {
-        "name": "linux_coverage_gather",
-        "tests": "1",
-        "failures": "0",
-        "errors": "0",
-        "skipped": "0",
-        "time": "0",
-    },
-)
-ET.SubElement(
-    suite,
-    "testcase",
-    {
-        "classname": "linux_coverage_gather",
-        "name": "coverage-gather-succeeded",
-        "time": "0",
-    },
-)
-ET.SubElement(suite, "system-out").text = (
-    "pgo-gather completed successfully. "
-    f"rawFiles={raw_files} rawSuites={raw_suites} rawTests={raw_tests} "
-    f"rawFailures={raw_failures} rawErrors={raw_errors} rawSkipped={raw_skipped} "
-    f"rawReports={reports_root / 'junit'}"
-)
-
-out_path.parent.mkdir(parents=True, exist_ok=True)
-ET.ElementTree(root).write(out_path, encoding="utf-8", xml_declaration=True)
-PY
+  kano_cpp_infra_tool gather-summary-junit "$reports_root" "$input_dir" "$output_xml"
 }
 
 kano_cpp_linux_ci_pick_coverage_xml() {
@@ -732,58 +617,7 @@ kano_cpp_linux_ci_rewrite_export_manifests() {
   local target_output_dir="${2:?target output dir is required}"
   local repo_tmp_dir="${KANO_CPP_LINUX_CI_REPO_ROOT}/.kano/tmp"
 
-  python3 - "$staged_output_dir" "$target_output_dir" "$repo_tmp_dir" <<'PY'
-from __future__ import annotations
-
-import json
-import sys
-from pathlib import Path
-
-staged_output = Path(sys.argv[1])
-target_output = Path(sys.argv[2])
-repo_tmp = Path(sys.argv[3])
-
-if not repo_tmp.exists():
-    raise SystemExit(0)
-
-manifest_names = {p.name for p in staged_output.glob("*.export-manifest.json")}
-if not manifest_names:
-    raise SystemExit(0)
-
-for manifest_name in manifest_names:
-    candidates = [
-        target_output / manifest_name,
-        repo_tmp / manifest_name,
-    ]
-    for manifest_path in candidates:
-        if not manifest_path.is_file():
-            continue
-        try:
-            data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        archive_file = data.get("archiveFile")
-        if not isinstance(archive_file, str):
-            continue
-        archive_name = Path(archive_file).name
-        rewritten_archive = (target_output / archive_name).as_posix()
-        data["archiveFile"] = rewritten_archive
-        if isinstance(data.get("path"), str):
-            data["path"] = rewritten_archive
-        archives = data.get("archives")
-        if isinstance(archives, list):
-            for archive_entry in archives:
-                if not isinstance(archive_entry, dict):
-                    continue
-                entry_source = archive_entry.get("archiveFile") or archive_entry.get("path")
-                if not isinstance(entry_source, str):
-                    continue
-                entry_name = Path(entry_source).name
-                rewritten_entry = (target_output / entry_name).as_posix()
-                archive_entry["archiveFile"] = rewritten_entry
-                archive_entry["path"] = rewritten_entry
-        manifest_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-PY
+  kano_cpp_infra_tool rewrite-export-manifests "$staged_output_dir" "$target_output_dir" "$repo_tmp_dir"
 }
 
 kano_cpp_linux_ci_run_export() {

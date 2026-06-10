@@ -2,11 +2,7 @@
 set -euo pipefail
 
 KANO_INFRA_UNIX_PRESET_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_RESOLVER_SH="$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/python_resolver.sh"
-
-# shellcheck source=/dev/null
-source "$PYTHON_RESOLVER_SH"
-PYTHON_BIN="$(kano_resolve_python_bin)"
+. "$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/native_tool.sh"
 
 # Bootstrap pixi environment if not already active.
 # shellcheck source=/dev/null
@@ -38,12 +34,10 @@ kano_cpp_run_unix_preset() {
   local build_prefix="${3:-KANO}"
   local -a extra_args=()
   local -a cache_override_args=()
-  local -a build_args=()
   local llvm_prefix=""
   local sdk_path=""
   local arch=""
   local preset_name=""
-  local build_target=""
 
   if [[ -z "$in_configure_preset" || -z "$in_build_preset" ]]; then
     echo "Usage: kano_cpp_run_unix_preset <configure-preset> <build-preset> [prefix]" >&2
@@ -56,12 +50,7 @@ kano_cpp_run_unix_preset() {
 
   if [[ -n "${INF_CMAKE_CACHE_ARGS_JSON:-}" ]]; then
     # shellcheck disable=SC2207
-    cache_override_args+=( $(kano_python "$PYTHON_BIN" - <<'KANO_CACHE_ARGS_PY'
-import json, os
-for key, value in json.loads(os.environ['INF_CMAKE_CACHE_ARGS_JSON']).items():
-    print(f'-D{key}={value}')
-KANO_CACHE_ARGS_PY
-) )
+    cache_override_args+=( $(kano_cpp_infra_tool cache-args-to-cmake "$INF_CMAKE_CACHE_ARGS_JSON") )
   fi
 
   if [[ "${INF_BUILD_ENABLE_MODULES:-${KOG_BUILD_ENABLE_MODULES:-0}}" == "1" ]]; then
@@ -103,14 +92,7 @@ KANO_CACHE_ARGS_PY
     kano_cpp_collect_build_metadata
     kano_cpp_print_self_build_toolchain
     cmake --preset "$in_configure_preset" "${extra_args[@]}" "${cache_override_args[@]}"
-    build_args=(--preset "$in_build_preset")
-    if [[ -n "${KANO_CPP_INFRA_BUILD_TARGETS:-}" ]]; then
-      for build_target in ${KANO_CPP_INFRA_BUILD_TARGETS//,/ }; do
-        [[ -n "$build_target" ]] || continue
-        build_args+=(--target "$build_target")
-      done
-    fi
-    cmake --build "${build_args[@]}"
+    cmake --build --preset "$in_build_preset"
   )
 }
 

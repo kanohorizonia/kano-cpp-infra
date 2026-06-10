@@ -2,11 +2,7 @@
 set -euo pipefail
 
 KANO_INFRA_UNIX_PRESET_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_RESOLVER_SH="$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/../lib/python_resolver.sh"
-
-# shellcheck source=/dev/null
-source "$PYTHON_RESOLVER_SH"
-PYTHON_BIN="$(kano_resolve_python_bin)"
+. "$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/../lib/native_tool.sh"
 
 # Bootstrap pixi environment if not already active.
 # shellcheck source=/dev/null
@@ -52,12 +48,7 @@ kano_cpp_run_unix_preset() {
 
   if [[ -n "${INF_CMAKE_CACHE_ARGS_JSON:-}" ]]; then
     # shellcheck disable=SC2207
-    cache_override_args+=( $(kano_python "$PYTHON_BIN" - <<'KANO_CACHE_ARGS_PY'
-import json, os
-for key, value in json.loads(os.environ['INF_CMAKE_CACHE_ARGS_JSON']).items():
-    print(f'-D{key}={value}')
-KANO_CACHE_ARGS_PY
-) )
+    cache_override_args+=( $(kano_cpp_infra_tool cache-args-to-cmake "$INF_CMAKE_CACHE_ARGS_JSON") )
   fi
 
   if [[ "${INF_BUILD_ENABLE_MODULES:-${KOG_BUILD_ENABLE_MODULES:-0}}" == "1" ]]; then

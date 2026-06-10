@@ -6,14 +6,10 @@ INFRA_SCRIPTS_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 INFRA_BASE_DIR="$(cd -- "$INFRA_SCRIPTS_DIR/.." && pwd)"
 CPP_ROOT="$(cd -- "$INFRA_BASE_DIR/../.." && pwd)"
 REPO_ROOT="$(cd -- "$CPP_ROOT/../.." && pwd)"
-PYTHON_RESOLVER_SH="$INFRA_BASE_DIR/scripts/lib/python_resolver.sh"
+. "$INFRA_BASE_DIR/scripts/lib/native_tool.sh"
 
 LANE="${1:-default}"
 PRESET="${2:-windows-ninja-msvc-release}"
-
-# shellcheck source=/dev/null
-source "$PYTHON_RESOLVER_SH"
-PYTHON_BIN="$(kano_resolve_python_bin)"
 
 case "$LANE" in
   quick)
@@ -58,7 +54,7 @@ cp -f "$INFRA_BASE_DIR/config/suite-map.kano-git-master.json" "$REPORT_ROOT/raw/
 
 bash "$CPP_ROOT/code/tests/run_tests.sh" "$PRESET" "$LANE"
 if [[ -f "$KANO_TEST_XML" ]]; then
-  kano_python "$PYTHON_BIN" "$INFRA_BASE_DIR/scripts/tools/generate-bdd-metadata-from-junit.py" \
+  kano_cpp_infra_tool generate-bdd-metadata \
     "$KANO_TEST_XML" \
     "$KANO_BDD_METADATA_DIR" \
     "kano_git_cli_tests"

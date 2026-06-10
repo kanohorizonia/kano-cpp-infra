@@ -735,7 +735,7 @@ coverage_build_linux_via_docker() {
         "cp -a /input/src/cpp /workspace/src/cpp" \
         "cd /workspace/src/cpp" \
         "apt-get update" \
-        "DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build clang llvm llvm-tools python3 git" \
+        "DEBIAN_FRONTEND=noninteractive apt-get install -y cmake ninja-build clang llvm llvm-tools git" \
         "cmake --preset ${q_preset}" \
         "cmake --build --preset ${q_preset}"
 

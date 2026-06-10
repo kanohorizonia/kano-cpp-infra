@@ -18,20 +18,7 @@ dependencies = {
     ccache = "*",
     cmake = ">=3.21",
     git = "*",
+    jq = "*",
     ninja = ">=1.13.2,<2",
-    python = ">=3.11",
     ripgrep = "*",
 }
-
-# Platform-specific pypi packages
-[target.win-64.pypi-dependencies]
-jq = "*"
-
-[target.linux-64.pypi-dependencies]
-jq = "*"
-
-[target.osx-64.pypi-dependencies]
-jq = "*"
-
-[target.osx-arm64.pypi-dependencies]
-jq = "*"

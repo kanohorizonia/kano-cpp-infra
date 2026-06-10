@@ -15,7 +15,7 @@ from location alone. Before moving or creating any file here, read this contract
 | `stages/` | Single-step entrypoints | **YES** | Executable shell scripts that perform one build/test/stage operation |
 | `workflows/` | Multi-step orchestrators | **YES** | Executable shell scripts that coordinate multiple stages |
 | `platform/` | Platform-specific wrappers | **YES** | Executable wrappers for Linux, macOS, Windows; map host OS → correct tool |
-| `tools/` | Standalone utilities | **YES** | Independent tools (shell, Python, PowerShell) that don't belong to a subsystem |
+| `tools/` | Standalone utilities | **YES** | Independent native/shell/PowerShell tools that do not belong to a subsystem |
 | `reports/` | Reporting subsystem | **YES** | Report generation, packaging, providers, and verification |
 
 ### Non-Shell Exceptions (out of taxonomy)
@@ -48,7 +48,7 @@ from location alone. Before moving or creating any file here, read this contract
 ## Approved Exceptions
 
 1. **`cmake/`** — non-shell config, exempt from shell taxonomy rules
-2. **`profiling/`** — self-contained subsystem (data + Python + shell); treated as a single unit
+2. **`profiling/`** — self-contained subsystem (data + native tool calls + shell); treated as a single unit
 3. **Existing dual-mode files** (`coverage_report.sh`, `coverage_workflow.sh`, `pgo_workflow.sh`) — grandfathered but targeted for migration
 
 ---
@@ -83,7 +83,7 @@ reports/
 2. **Does it belong to the reporting subsystem**?
    - YES → `reports/` with `providers/` or `verify/` subfolders
 
-3. **Is it a non-shell config** (CMake, TOML, Python data)?
+3. **Is it a non-shell config** (CMake, TOML, JSON data)?
    - YES → `cmake/` or appropriate non-shell location
 
 ---

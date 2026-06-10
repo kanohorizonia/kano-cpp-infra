@@ -39,8 +39,8 @@ horizon_base_rsync_protocol_flag() {
 # horizon_base_ensure_rsync
 # ─────────────────────────────────────────────────────────────────────────────
 # Lazily download MSYS2 rsync 3.4.1 to ~/bin/rsync.exe if no usable rsync
-# exists.  Uses Python _zstd to decompress the .pkg.tar.zst container and
-# extracts just the usr/bin/rsync.exe entry.
+# exists.  Uses native archive tools to decompress the .pkg.tar.zst container
+# and extracts just the usr/bin/rsync.exe entry.
 #
 # Avoids modifying MSYS2 installations or pixi environments.
 # Self-contained: the extracted binary carries its own runtime expectations.
@@ -62,29 +62,29 @@ horizon_base_ensure_rsync() {
         curl -L -o "$pkg_file" "$msys2_url"
     fi
 
-    # Decompress using Python _zstd, then extract rsync.exe from the tar layer
+    # Decompress with native archive tools, then extract rsync.exe from the tar layer.
     echo "[horizon_base] Extracting rsync.exe from $pkg_file" >&2
-    python3 -c "
-import sys, _zstd
-with open('$pkg_file', 'rb') as f:
-    data = _zstd.decompress(f.read())
-import tarfile, io
-with tarfile.open(fileobj=io.BytesIO(data)) as tar:
-    for member in tar.getmembers():
-        if member.name.endswith('rsync.exe'):
-            member.name = 'rsync.exe'
-            tar.extract(member, path='$HOME/bin')
-" 2>/dev/null || python -c "
-import sys, _zstd
-with open('$pkg_file', 'rb') as f:
-    data = _zstd.decompress(f.read())
-import tarfile, io
-with tarfile.open(fileobj=io.BytesIO(data)) as tar:
-    for member in tar.getmembers():
-        if member.name.endswith('rsync.exe'):
-            member.name = 'rsync.exe'
-            tar.extract(member, path='$HOME/bin')
-"
+    local extract_tmp="${HOME}/.cache/rsync-3.4.1-extract"
+    rm -rf -- "$extract_tmp"
+    mkdir -p "$extract_tmp"
+
+    if tar --help 2>/dev/null | grep -q -- '--zstd'; then
+        tar --zstd -xf "$pkg_file" -C "$extract_tmp"
+    elif command -v bsdtar >/dev/null 2>&1; then
+        bsdtar -xf "$pkg_file" -C "$extract_tmp"
+    elif command -v zstd >/dev/null 2>&1; then
+        zstd -dc "$pkg_file" | tar -xf - -C "$extract_tmp"
+    else
+        echo "[horizon_base] ERROR: extracting rsync requires tar with zstd support, bsdtar, or zstd." >&2
+        return 1
+    fi
+
+    local extracted_rsync=""
+    extracted_rsync="$(find "$extract_tmp" -type f -name 'rsync.exe' | head -n 1 || true)"
+    if [[ -n "$extracted_rsync" ]]; then
+        cp -f "$extracted_rsync" "$rsync_cache"
+        chmod +x "$rsync_cache" 2>/dev/null || true
+    fi
 
     if [[ ! -x "$rsync_cache" ]]; then
         echo "[horizon_base] ERROR: rsync extraction failed, rsync.exe not found at $rsync_cache" >&2

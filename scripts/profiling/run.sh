@@ -4,9 +4,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/common.sh"
+. "$SCRIPT_DIR/../lib/native_tool.sh"
 
 MATRIX_NAME="${1:-default}"
 MATRIX_PATH="$(inf_profile_require_matrix "$MATRIX_NAME")"
 
-PYTHON_BIN="$(kano_resolve_python_bin)"
-kano_python "$PYTHON_BIN" "$SCRIPT_DIR/run_matrix.py" "$MATRIX_PATH" "$INF_PROFILE_TMP_ROOT" "$INF_PROFILE_REPO_ROOT" "$INF_PROFILE_CPP_ROOT"
+kano_cpp_infra_tool run-profile-matrix "$MATRIX_PATH" "$INF_PROFILE_TMP_ROOT" "$INF_PROFILE_REPO_ROOT" "$INF_PROFILE_CPP_ROOT"

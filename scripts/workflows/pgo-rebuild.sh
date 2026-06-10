@@ -12,18 +12,7 @@ WINDOWS_PRESET_BUILD_SH="$LIB_ROOT/windows_preset_build.sh"
 PGO_GATHER_SH="$STAGES_ROOT/pgo-gather.sh"
 PGO_WORKFLOW_SH="$LIB_ROOT/pgo_workflow.sh"
 PROFILE_MANIFEST_SH="$STAGES_ROOT/profile-run-manifest.sh"
-PYTHON_RESOLVER_SH="$LIB_ROOT/python_resolver.sh"
-
-# shellcheck source=/dev/null
-source "$PYTHON_RESOLVER_SH"
-PYTHON_BIN="$(kano_resolve_python_bin)"
-
-if [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
-  # Apple ld can fail to link large x64 Clang binaries that combine coverage
-  # mapping and PGO runtime data. Keep the macOS training lane representative
-  # and bounded by default; explicit full gather runs can set this to 0.
-  export KANO_CPP_INFRA_PGO_GATHER_QUICK="${KANO_CPP_INFRA_PGO_GATHER_QUICK:-1}"
-fi
+. "$LIB_ROOT/native_tool.sh"
 
 require_file() {
   local in_path="$1"
@@ -35,71 +24,12 @@ require_file() {
 
 json_with_pgo_mode() {
   local in_mode="$1"
-  kano_python "$PYTHON_BIN" - "$in_mode" <<'PY'
-import json
-import os
-import sys
-
-mode = sys.argv[1]
-raw = (
-    os.environ.get("KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON")
-    or os.environ.get("INF_CMAKE_CACHE_ARGS_JSON")
-    or ""
-).strip()
-data = {}
-if raw:
-    data = json.loads(raw)
-data["KANO_CPP_INFRA_PGO_MODE"] = mode
-if mode == "collect":
-    coverage_mapping = os.environ.get("KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING", "").strip()
-    if coverage_mapping:
-        data["KOG_PGO_COLLECT_ENABLE_COVERAGE_MAPPING"] = coverage_mapping
-if mode == "use":
-    pgo_profile_dir = os.environ.get("INF_PGO_PROFILE_DIR", "").strip()
-    if pgo_profile_dir:
-        data["KOG_PGO_PROFILE_DIR"] = pgo_profile_dir
-    data.setdefault(
-        "KOG_BUILD_TESTS",
-        os.environ.get("KANO_CPP_INFRA_PGO_USE_BUILD_TESTS", "ON"),
-    )
-print(json.dumps(data))
-PY
-}
-
-restore_cmake_cache_args_json() {
-  local had_kano_cache_args="$1"
-  local original_kano_cache_args="$2"
-  local had_inf_cache_args="$3"
-  local original_inf_cache_args="$4"
-
-  if [[ "$had_kano_cache_args" -eq 1 ]]; then
-    export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_kano_cache_args"
-  else
-    unset KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON || true
-  fi
-  if [[ "$had_inf_cache_args" -eq 1 ]]; then
-    export INF_CMAKE_CACHE_ARGS_JSON="$original_inf_cache_args"
-  else
-    unset INF_CMAKE_CACHE_ARGS_JSON || true
-  fi
+  kano_cpp_infra_tool cache-args-with-pgo-mode "$in_mode"
 }
 
 cmake_preset_exists() {
   local preset_name="$1"
-  [[ -f "$CPP_ROOT/CMakePresets.json" ]] || return 1
-  kano_python "$PYTHON_BIN" - "$CPP_ROOT/CMakePresets.json" "$preset_name" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-name = sys.argv[2]
-data = json.loads(path.read_text(encoding="utf-8"))
-presets = []
-for section in ("configurePresets", "buildPresets"):
-    presets.extend(str(item.get("name", "")) for item in data.get(section, []))
-raise SystemExit(0 if name in presets else 1)
-PY
+  kano_cpp_infra_tool cmake-preset-exists "$CPP_ROOT/CMakePresets.json" "$preset_name"
 }
 
 first_existing_preset() {
@@ -129,9 +59,9 @@ default_coverage_configure_preset() {
     first_existing_preset windows-ninja-msvc-coverage windows-ninja-msvc
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-coverage macos-ninja-clang-coverage macos-ninja-clang-arm64 macos-ninja-clang
+      first_existing_preset macos-ninja-clang-arm64-coverage macos-ninja-clang-arm64 macos-ninja-clang-coverage macos-ninja-clang
     else
-      first_existing_preset macos-ninja-clang-x64-coverage macos-ninja-clang-coverage macos-ninja-clang-x64 macos-ninja-clang
+      first_existing_preset macos-ninja-clang-x64-coverage macos-ninja-clang-x64 macos-ninja-clang-coverage macos-ninja-clang
     fi
   else
     first_existing_preset linux-ninja-clang-coverage linux-ninja-gcc-coverage linux-ninja-clang linux-ninja-gcc
@@ -143,9 +73,9 @@ default_coverage_build_preset() {
     first_existing_preset windows-ninja-msvc-coverage-debug windows-ninja-msvc-debug
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-coverage-debug macos-ninja-clang-coverage-debug macos-ninja-clang-arm64-debug macos-ninja-clang-debug
+      first_existing_preset macos-ninja-clang-arm64-coverage-debug macos-ninja-clang-arm64-debug macos-ninja-clang-coverage-debug macos-ninja-clang-debug
     else
-      first_existing_preset macos-ninja-clang-x64-coverage-debug macos-ninja-clang-coverage-debug macos-ninja-clang-x64-debug macos-ninja-clang-debug
+      first_existing_preset macos-ninja-clang-x64-coverage-debug macos-ninja-clang-x64-debug macos-ninja-clang-coverage-debug macos-ninja-clang-debug
     fi
   else
     first_existing_preset linux-ninja-clang-coverage-debug linux-ninja-gcc-coverage-debug linux-ninja-clang-debug linux-ninja-gcc-debug
@@ -157,9 +87,9 @@ default_collect_configure_preset() {
     first_existing_preset windows-ninja-msvc-pgo-collect windows-ninja-msvc windows-ninja-clang-pgo-collect windows-ninja-clang
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-pgo-collect macos-ninja-clang-pgo-collect macos-ninja-clang-arm64 macos-ninja-clang
+      first_existing_preset macos-ninja-clang-arm64-pgo-collect macos-ninja-clang-arm64 macos-ninja-clang-pgo-collect macos-ninja-clang
     else
-      first_existing_preset macos-ninja-clang-x64-pgo-collect macos-ninja-clang-pgo-collect macos-ninja-clang-x64 macos-ninja-clang
+      first_existing_preset macos-ninja-clang-x64-pgo-collect macos-ninja-clang-x64 macos-ninja-clang-pgo-collect macos-ninja-clang
     fi
   else
     first_existing_preset linux-ninja-gcc-pgo-collect linux-ninja-gcc linux-ninja-clang-pgo-collect linux-ninja-clang
@@ -171,9 +101,9 @@ default_collect_build_preset() {
     first_existing_preset windows-ninja-msvc-pgo-collect-debug windows-ninja-msvc-debug windows-ninja-clang-pgo-collect-debug windows-ninja-clang-debug
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-pgo-collect-debug macos-ninja-clang-pgo-collect-debug macos-ninja-clang-arm64-debug macos-ninja-clang-debug
+      first_existing_preset macos-ninja-clang-arm64-pgo-collect-debug macos-ninja-clang-arm64-debug macos-ninja-clang-pgo-collect-debug macos-ninja-clang-debug
     else
-      first_existing_preset macos-ninja-clang-x64-pgo-collect-debug macos-ninja-clang-pgo-collect-debug macos-ninja-clang-x64-debug macos-ninja-clang-debug
+      first_existing_preset macos-ninja-clang-x64-pgo-collect-debug macos-ninja-clang-x64-debug macos-ninja-clang-pgo-collect-debug macos-ninja-clang-debug
     fi
   else
     first_existing_preset linux-ninja-gcc-pgo-collect-debug linux-ninja-gcc-debug linux-ninja-clang-pgo-collect-debug linux-ninja-clang-debug
@@ -185,9 +115,9 @@ default_use_configure_preset() {
     first_existing_preset windows-ninja-msvc-pgo-use windows-ninja-msvc windows-ninja-clang-pgo-use windows-ninja-clang
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-pgo-use macos-ninja-clang-pgo-use macos-ninja-clang-arm64 macos-ninja-clang
+      first_existing_preset macos-ninja-clang-arm64-pgo-use macos-ninja-clang-arm64 macos-ninja-clang-pgo-use macos-ninja-clang
     else
-      first_existing_preset macos-ninja-clang-x64-pgo-use macos-ninja-clang-pgo-use macos-ninja-clang-x64 macos-ninja-clang
+      first_existing_preset macos-ninja-clang-x64-pgo-use macos-ninja-clang-x64 macos-ninja-clang-pgo-use macos-ninja-clang
     fi
   else
     first_existing_preset linux-ninja-gcc-pgo-use linux-ninja-gcc linux-ninja-clang-pgo-use linux-ninja-clang
@@ -199,20 +129,13 @@ default_use_build_preset() {
     first_existing_preset windows-ninja-msvc-pgo-use-release windows-ninja-msvc-release windows-ninja-clang-pgo-use-release windows-ninja-clang-release
   elif is_macos_host; then
     if [[ "$(uname -m 2>/dev/null || true)" == "arm64" || "$(uname -m 2>/dev/null || true)" == "aarch64" ]]; then
-      first_existing_preset macos-ninja-clang-arm64-pgo-use-release macos-ninja-clang-pgo-use-release macos-ninja-clang-arm64-release macos-ninja-clang-release
+      first_existing_preset macos-ninja-clang-arm64-pgo-use-release macos-ninja-clang-arm64-release macos-ninja-clang-pgo-use-release macos-ninja-clang-release
     else
-      first_existing_preset macos-ninja-clang-x64-pgo-use-release macos-ninja-clang-pgo-use-release macos-ninja-clang-x64-release macos-ninja-clang-release
+      first_existing_preset macos-ninja-clang-x64-pgo-use-release macos-ninja-clang-x64-release macos-ninja-clang-pgo-use-release macos-ninja-clang-release
     fi
   else
     first_existing_preset linux-ninja-gcc-pgo-use-release linux-ninja-gcc-release linux-ninja-clang-pgo-use-release linux-ninja-clang-release
   fi
-}
-
-prepare_pgo_profile_paths() {
-  export INF_BUILD_ROOT="${INF_BUILD_ROOT:-$CPP_ROOT/out}"
-  export INF_PGO_ROOT="${INF_PGO_ROOT:-$CPP_ROOT/out/pgo}"
-  export INF_PGO_PROFILE_DIR="${KANO_CPP_INFRA_PGO_PROFILE_DIR:-${INF_PGO_PROFILE_DIR:-$CPP_ROOT/out/pgo}}"
-  mkdir -p "$INF_PGO_PROFILE_DIR"
 }
 
 pgo_compiler_id_for_preset() {
@@ -225,60 +148,10 @@ pgo_compiler_id_for_preset() {
   esac
 }
 
-remove_build_tree_for_reconfigure() {
-  local in_path="$1"
-  [[ -n "$in_path" ]] || return 0
-  [[ -d "$in_path" ]] || return 0
-
-  local trash_path="${in_path}.delete-$RANDOM-$$"
-  if mv "$in_path" "$trash_path" 2>/dev/null; then
-    local attempt
-    for attempt in 1 2 3; do
-      chmod -R u+w "$trash_path" 2>/dev/null || true
-      if rm -rf "$trash_path" 2>/dev/null; then
-        return 0
-      fi
-      sleep "$attempt"
-    done
-    echo "[pgo] warning: stale build dir moved aside but not fully deleted: $trash_path" >&2
-    return 0
-  fi
-
-  local attempt
-  for attempt in 1 2 3; do
-    chmod -R u+w "$in_path" 2>/dev/null || true
-    if rm -rf "$in_path" 2>/dev/null; then
-      return 0
-    fi
-    sleep "$attempt"
-  done
-
-  if [[ -d "$in_path" ]]; then
-    echo "[pgo] failed to clean stale build dir: $in_path" >&2
-    return 1
-  fi
-}
-
 run_collect_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-$(default_collect_build_preset)}"
-  local original_kano_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
-  local original_inf_cache_args="${INF_CMAKE_CACHE_ARGS_JSON:-}"
-  local original_build_targets="${KANO_CPP_INFRA_BUILD_TARGETS:-}"
-  local original_collect_coverage_mapping="${KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING:-}"
-  local had_kano_cache_args=0
-  local had_inf_cache_args=0
-  local had_collect_coverage_mapping=0
-  local collect_build_targets="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_TARGETS:-}"
-  if [[ "${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON+x}" == "x" ]]; then
-    had_kano_cache_args=1
-  fi
-  if [[ "${INF_CMAKE_CACHE_ARGS_JSON+x}" == "x" ]]; then
-    had_inf_cache_args=1
-  fi
-  if [[ "${KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING+x}" == "x" ]]; then
-    had_collect_coverage_mapping=1
-  fi
+  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
 
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
   export KANO_CPP_ROOT="$CPP_ROOT"
@@ -297,27 +170,13 @@ run_collect_build() {
       export KANO_CPP_INFRA_PGO_COMPILER_ID="$compiler_id"
     fi
   fi
-  if is_macos_host && [[ "$had_collect_coverage_mapping" -eq 0 ]]; then
-    export KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING="OFF"
-    echo "[pgo] macOS collect coverage mapping: OFF" >&2
-  fi
-  local collect_cache_args
-  collect_cache_args="$(json_with_pgo_mode collect)"
-  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$collect_cache_args"
-  export INF_CMAKE_CACHE_ARGS_JSON="$collect_cache_args"
-  if [[ -z "$collect_build_targets" && "$(uname -s 2>/dev/null || true)" == "Darwin" && "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
-    collect_build_targets="kano_git_tui_tests"
-  fi
-  if [[ -n "$collect_build_targets" ]]; then
-    export KANO_CPP_INFRA_BUILD_TARGETS="$collect_build_targets"
-    echo "[pgo] collect build targets: $collect_build_targets" >&2
-  fi
+  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode collect)"
 
   # Clean the pgo-collect build dir to ensure MSVC is used (not a stale MinGW cache)
   local collect_obj_dir="$CPP_ROOT/out/obj/$configure_preset"
   if [[ -d "$collect_obj_dir" ]]; then
     echo "[pgo] cleaning stale collect build dir: $collect_obj_dir" >&2
-    remove_build_tree_for_reconfigure "$collect_obj_dir"
+    rm -rf "$collect_obj_dir"
   fi
 
   if is_windows_host; then
@@ -330,43 +189,20 @@ run_collect_build() {
     kano_cpp_run_unix_preset "$configure_preset" "$build_preset"
   fi
 
-  restore_cmake_cache_args_json "$had_kano_cache_args" "$original_kano_cache_args" "$had_inf_cache_args" "$original_inf_cache_args"
-  if [[ -n "$original_build_targets" ]]; then
-    export KANO_CPP_INFRA_BUILD_TARGETS="$original_build_targets"
-  else
-    unset KANO_CPP_INFRA_BUILD_TARGETS || true
-  fi
-  if [[ "$had_collect_coverage_mapping" -eq 1 ]]; then
-    export KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING="$original_collect_coverage_mapping"
-  else
-    unset KANO_CPP_INFRA_PGO_COLLECT_ENABLE_COVERAGE_MAPPING || true
-  fi
+  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
 }
 
 run_use_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET:-$(default_use_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_USE_BUILD_PRESET:-$(default_use_build_preset)}"
-  local original_kano_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
-  local original_inf_cache_args="${INF_CMAKE_CACHE_ARGS_JSON:-}"
-  local had_kano_cache_args=0
-  local had_inf_cache_args=0
-  if [[ "${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON+x}" == "x" ]]; then
-    had_kano_cache_args=1
-  fi
-  if [[ "${INF_CMAKE_CACHE_ARGS_JSON+x}" == "x" ]]; then
-    had_inf_cache_args=1
-  fi
+  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
 
-  prepare_pgo_profile_paths
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
   export KANO_CPP_ROOT="$CPP_ROOT"
   if is_windows_host; then
     export KANO_CPP_INFRA_PGO_COMPILER_ID="MSVC"
   fi
-  local use_cache_args
-  use_cache_args="$(json_with_pgo_mode use)"
-  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$use_cache_args"
-  export INF_CMAKE_CACHE_ARGS_JSON="$use_cache_args"
+  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode use)"
 
   if is_windows_host; then
     # shellcheck disable=SC1090
@@ -378,7 +214,7 @@ run_use_build() {
     kano_cpp_run_unix_preset "$configure_preset" "$build_preset"
   fi
 
-  restore_cmake_cache_args_json "$had_kano_cache_args" "$original_kano_cache_args" "$had_inf_cache_args" "$original_inf_cache_args"
+  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
 }
 
 prepare_pgo_collect_environment() {
@@ -566,14 +402,12 @@ main() {
   resolve_profile_manifest
 
   if [[ "$stage" == "profile-gather" ]]; then
-    prepare_pgo_collect_environment
     run_gather_stage
     return 0
   fi
 
   if [[ "$stage" == "pgo-build" ]]; then
     prepare_pgo_collect_environment
-    prepare_pgo_profile_paths
     bash "$PGO_WORKFLOW_SH" merge
     copy_msvc_pgd_to_use_dir
     run_use_build
@@ -605,7 +439,6 @@ main() {
     return 0
   fi
 
-  prepare_pgo_profile_paths
   bash "$PGO_WORKFLOW_SH" merge
   copy_msvc_pgd_to_use_dir
   run_use_build

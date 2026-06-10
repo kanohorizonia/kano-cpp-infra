@@ -44,12 +44,6 @@ else
   packages+=(ninja-build)
 fi
 
-if has_pixi_env && (have_command python || have_command python3); then
-  echo "[prereq][linux] pixi provides python; skipping apt package python3"
-else
-  packages+=(python3)
-fi
-
 if has_pixi_env && have_command git; then
   echo "[prereq][linux] pixi provides git; skipping apt package git"
 else

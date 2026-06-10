@@ -11,6 +11,7 @@ add_subdirectory(code/systems/kano_infra_process)
 add_subdirectory(code/systems/kano_infra_diagnostics)
 add_subdirectory(code/systems/kano_infra_self)
 add_subdirectory(code/systems/kano_infra_timing)
+add_subdirectory(code/apps/kano_infra_tool)
 
 add_library(kano_infra_all INTERFACE)
 target_link_libraries(kano_infra_all INTERFACE
