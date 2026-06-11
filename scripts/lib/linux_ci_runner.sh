@@ -16,6 +16,8 @@ export KANO_CPP_ROOT="${KANO_CPP_ROOT:-$KANO_CPP_LINUX_CI_CPP_ROOT}"
 source "$KANO_CPP_LINUX_CI_LIB_DIR/docker_host.sh"
 # shellcheck disable=SC1091
 source "$KANO_CPP_LINUX_CI_LIB_DIR/native_tool.sh"
+# shellcheck disable=SC1091
+source "$KANO_CPP_LINUX_CI_LIB_DIR/python_resolver.sh"
 
 kano_cpp_linux_ci_host_os() {
   uname -s 2>/dev/null || echo "unknown"
@@ -425,12 +427,12 @@ kano_cpp_linux_ci_pick_coverage_xml() {
 kano_cpp_linux_ci_normalize_cobertura_for_jenkins() {
   local source_xml="${1:?source xml is required}"
   local target_xml="${2:?target xml is required}"
-  local python_cmd=""
+  local python_bin=""
 
-  python_cmd="$(kano_cpp_linux_ci_python)" || return 1
+  python_bin="$(kano_resolve_python_bin)" || return 1
   mkdir -p "$(dirname "$target_xml")"
 
-  "$python_cmd" - "$source_xml" "$target_xml" <<'PY'
+  kano_python "$python_bin" - "$source_xml" "$target_xml" <<'PY'
 from __future__ import annotations
 
 import sys
