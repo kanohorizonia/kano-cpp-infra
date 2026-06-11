@@ -3,6 +3,45 @@ project(kano-cpp-infra VERSION 1.0.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+include(FetchContent)
+
+set(KANO_JSONCPP_SOURCE_MODE "fetch" CACHE STRING "jsoncpp source mode: fetch|system")
+set_property(CACHE KANO_JSONCPP_SOURCE_MODE PROPERTY STRINGS fetch system)
+
+if(KANO_JSONCPP_SOURCE_MODE STREQUAL "fetch")
+    set(JSONCPP_WITH_TESTS OFF CACHE BOOL "" FORCE)
+    set(JSONCPP_WITH_POST_BUILD_UNITTEST OFF CACHE BOOL "" FORCE)
+    set(JSONCPP_WITH_WARNING_AS_ERROR OFF CACHE BOOL "" FORCE)
+    set(JSONCPP_WITH_PKGCONFIG_SUPPORT OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        jsoncpp
+        GIT_REPOSITORY https://github.com/open-source-parsers/jsoncpp.git
+        GIT_TAG 1.9.6
+        GIT_SHALLOW TRUE
+        GIT_PROGRESS TRUE
+    )
+    FetchContent_MakeAvailable(jsoncpp)
+elseif(KANO_JSONCPP_SOURCE_MODE STREQUAL "system")
+    find_package(jsoncpp CONFIG REQUIRED)
+else()
+    message(FATAL_ERROR "Unsupported KANO_JSONCPP_SOURCE_MODE: ${KANO_JSONCPP_SOURCE_MODE} (expected fetch|system)")
+endif()
+
+if(TARGET JsonCpp::JsonCpp)
+    set(_jsoncpp_target JsonCpp::JsonCpp)
+elseif(TARGET jsoncpp_static)
+    set(_jsoncpp_target jsoncpp_static)
+elseif(TARGET jsoncpp_lib)
+    set(_jsoncpp_target jsoncpp_lib)
+else()
+    message(FATAL_ERROR "jsoncpp target not found after resolving KANO_JSONCPP_SOURCE_MODE=${KANO_JSONCPP_SOURCE_MODE}")
+endif()
+
+if(DEFINED jsoncpp_SOURCE_DIR)
+    set(_jsoncpp_include_dir "${jsoncpp_SOURCE_DIR}/include")
+else()
+    set(_jsoncpp_include_dir "")
+endif()
 
 add_subdirectory(code/systems/kano_infra_config)
 add_subdirectory(code/systems/kano_infra_build_info)

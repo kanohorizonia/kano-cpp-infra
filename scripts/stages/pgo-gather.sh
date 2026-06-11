@@ -19,8 +19,25 @@
 #       Set to 'coverage' to use coverage presets instead of PGO presets.
 #       Useful for obtaining complete test coverage data while gathering profiles.
 #
+#   KANO_CPP_INFRA_PGO_GATHER_WITH_COVERAGE
+#       Set to 1/true to auto-select a coverage tool while running the PGO gather
+#       preset. By default PGO gather runs tests directly and leaves coverage to
+#       the dedicated coverage stage.
+#
 #   KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET
 #       Override the auto-detected preset name.
+#
+#   KANO_CPP_INFRA_PGO_GATHER_CLI_FILTER
+#       Override the CLI training test filter. The default is a stable
+#       infrastructure smoke; full functional coverage belongs in the later test
+#       stage, not the PGO profile-gather stage.
+#
+#   KANO_CPP_INFRA_PGO_GATHER_COMMIT_PLAN_FILTER
+#   KANO_CPP_INFRA_PGO_GATHER_EXPORT_FILTER
+#   KANO_CPP_INFRA_PGO_GATHER_TUI_FILTER
+#       Override the remaining training filters. Defaults are intentionally
+#       short representative smoke tests; exhaustive unit/property/integration
+#       coverage belongs in the later automation test stage.
 # ============================================================================
 
 set -euo pipefail
@@ -48,6 +65,13 @@ is_pgo_verbose_enabled() {
     raw="${KANO_CPP_INFRA_PGO_DEBUG:-0}"
   fi
   case "$raw" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_truthy() {
+  case "${1:-}" in
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
     *) return 1 ;;
   esac
@@ -834,13 +858,24 @@ run_collect_tests_default() {
     ensure_windows_pgo_runtime_path
   fi
 
-  # Auto-select coverage tool based on platform (can be overridden by KANO_CPP_INFRA_COVERAGE_TOOL)
+  # Auto-select coverage tool only for explicit coverage lanes. PGO gather should
+  # run tests directly by default so coverage wrapper instability cannot corrupt
+  # profile gathering or JUnit output.
   local coverage_tool="${KANO_CPP_INFRA_COVERAGE_TOOL:-}"
+  local coverage_tool_explicit=0
+  if [[ -n "${KANO_CPP_INFRA_COVERAGE_TOOL+x}" ]]; then
+    coverage_tool_explicit=1
+  fi
   if [[ "$coverage_tool" == "none" ]]; then
     coverage_tool=""
   fi
 
-  if [[ -z "$coverage_tool" ]]; then
+  local auto_select_coverage=0
+  if [[ "$gather_mode" == "coverage" ]] || is_truthy "${KANO_CPP_INFRA_PGO_GATHER_WITH_COVERAGE:-0}"; then
+    auto_select_coverage=1
+  fi
+
+  if [[ -z "$coverage_tool" && "$coverage_tool_explicit" -eq 0 && "$auto_select_coverage" -eq 1 ]]; then
     if is_windows_host; then
       if _has_opencppcoverage; then
         coverage_tool="opencppcoverage"
@@ -873,15 +908,20 @@ run_collect_tests_default() {
   fi
 
   echo "[pgo-gather] using gather mode: $gather_mode, preset: $preset_name" >&2
-  # - CLI functional path
+  local cli_training_filter="${KANO_CPP_INFRA_PGO_GATHER_CLI_FILTER:-[functional][infrastructure]}"
+  local commit_plan_training_filter="${KANO_CPP_INFRA_PGO_GATHER_COMMIT_PLAN_FILTER:-[Unit][SerializePlanJson]}"
+  local export_training_filter="${KANO_CPP_INFRA_PGO_GATHER_EXPORT_FILTER:-[tdd][unit][feature:kog-export-upload][config]}"
+  local tui_training_filter="${KANO_CPP_INFRA_PGO_GATHER_TUI_FILTER:-[unit]}"
+
+  # - CLI smoke path
   # - commit-plan engine + properties
   # - export/archive paths
   # - TUI command-state/autocomplete paths
   local -a suite=(
-    "kano_git_cli_tests|[functional]"
-    "kano_git_commit_plan_tests|[unit],[property]"
-    "kano_git_export_tests|[unit],[integration]"
-    "kano_git_tui_tests|[unit],[property]"
+    "kano_git_cli_tests|$cli_training_filter"
+    "kano_git_commit_plan_tests|$commit_plan_training_filter"
+    "kano_git_export_tests|$export_training_filter"
+    "kano_git_tui_tests|$tui_training_filter"
   )
 
   # Quick mode keeps the full PGO workflow but reduces gather runtime by
@@ -889,7 +929,7 @@ run_collect_tests_default() {
   if [[ "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
     echo "[pgo-gather] quick mode enabled: reduced gather suite" >&2
     suite=(
-      "kano_git_tui_tests|[unit],[property]"
+      "kano_git_tui_tests|$tui_training_filter"
     )
   fi
 

@@ -112,6 +112,175 @@ kano_cpp_infra_tool_bootstrap_cmake_preset_exists() {
   grep -Eq "\"name\"[[:space:]]*:[[:space:]]*\"${preset_name//\//\\/}\"" "$presets_json"
 }
 
+kano_cpp_infra_tool_json_string() {
+  local text="${1:-}"
+  text="${text//\\/\\\\}"
+  text="${text//\"/\\\"}"
+  text="${text//$'\r'/\\r}"
+  text="${text//$'\n'/\\n}"
+  text="${text//$'\t'/\\t}"
+  printf '"%s"' "$text"
+}
+
+kano_cpp_infra_tool_csv_json_array() {
+  local raw="${1:-}"
+  local first=1
+  local item
+  printf '['
+  IFS=',' read -r -a items <<< "$raw"
+  for item in "${items[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    [[ -n "$item" ]] || continue
+    if [[ "$first" -eq 0 ]]; then
+      printf ','
+    fi
+    first=0
+    kano_cpp_infra_tool_json_string "$item"
+  done
+  printf ']'
+}
+
+kano_cpp_infra_tool_bootstrap_profile_run_manifest() {
+  local compiler=""
+  local coverage_provider=""
+  local pgo_provider=""
+  local mode=""
+  local out=""
+  local training_command=""
+  local coverage_command=""
+  local pgo_data_paths=""
+  local coverage_report_paths=""
+  local microsoft_server_mode=0
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --microsoft-server-mode)
+        microsoft_server_mode=1
+        shift
+        ;;
+      --compiler|--coverage-provider|--pgo-provider|--profile-run-mode|--out|--training-command|--coverage-command|--pgo-data-paths|--coverage-report-paths)
+        local key="$1"
+        shift
+        if [[ "$#" -eq 0 ]]; then
+          echo "profile-run-manifest missing value for $key" >&2
+          return 2
+        fi
+        case "$key" in
+          --compiler) compiler="$1" ;;
+          --coverage-provider) coverage_provider="$1" ;;
+          --pgo-provider) pgo_provider="$1" ;;
+          --profile-run-mode) mode="$1" ;;
+          --out) out="$1" ;;
+          --training-command) training_command="$1" ;;
+          --coverage-command) coverage_command="$1" ;;
+          --pgo-data-paths) pgo_data_paths="$1" ;;
+          --coverage-report-paths) coverage_report_paths="$1" ;;
+        esac
+        shift
+        ;;
+      *)
+        echo "unknown profile-run-manifest argument: $1" >&2
+        return 2
+        ;;
+    esac
+  done
+
+  if [[ -z "$out" ]]; then
+    echo "profile-run-manifest requires --out" >&2
+    return 2
+  fi
+
+  compiler="$(printf '%s' "${compiler:-${KANO_CXX_COMPILER:-msvc}}" | tr '[:upper:]' '[:lower:]')"
+  coverage_provider="$(printf '%s' "${coverage_provider:-${KANO_CXX_COVERAGE_PROVIDER:-none}}" | tr '[:upper:]' '[:lower:]')"
+  pgo_provider="$(printf '%s' "${pgo_provider:-${KANO_CXX_PGO_PROVIDER:-none}}" | tr '[:upper:]' '[:lower:]')"
+  mode="$(printf '%s' "${mode:-${KANO_CXX_PROFILE_RUN_MODE:-pgo-rebuild}}" | tr '[:upper:]' '[:lower:]')"
+
+  local unified_execution=false
+  local unified_profile_data=false
+  local split_lanes=true
+  local coverage_subject="normal-test-binary"
+  local collector_scope="none"
+  local notes_json=""
+
+  case "$mode" in
+    pgo-gather-with-coverage)
+      split_lanes=false
+      if [[ "$compiler" == "msvc" && "$coverage_provider" == "opencppcoverage" && "$pgo_provider" == "msvc-pgo" ]]; then
+        unified_execution=true
+        coverage_subject="pgo-instrumented-training-binary"
+        collector_scope="process-wrapper"
+        notes_json="$(kano_cpp_infra_tool_json_string "MSVC training run wrapped by OpenCppCoverage; coverage output remains separate from .pgd/.pgc data.")"
+      elif [[ "$compiler" == "msvc" && "$coverage_provider" == "microsoft-codecoverage" && "$pgo_provider" == "msvc-pgo" ]]; then
+        echo "MSVC unified PGO+coverage execution is only supported with OpenCppCoverage. Microsoft.CodeCoverage.Console coverage output is not MSVC PGO training data." >&2
+        return 2
+      elif [[ "$compiler" == "clang" && "$coverage_provider" == "llvm-cov" && "$pgo_provider" == "llvm-profdata" ]]; then
+        unified_execution=true
+        unified_profile_data=true
+        coverage_subject="llvm-instrumented-binary"
+        collector_scope="process-wrapper"
+        notes_json="$(kano_cpp_infra_tool_json_string "LLVM source-based instrumentation provides shared profile data for coverage and PGO.")"
+      else
+        echo "Unsupported unified profile combination: compiler=$compiler, coverageProvider=$coverage_provider, pgoProvider=$pgo_provider" >&2
+        return 2
+      fi
+      ;;
+    coverage-all)
+      if [[ "$coverage_provider" == "microsoft-codecoverage" ]]; then
+        coverage_subject="instrumented-coverage-binary"
+        if [[ "$microsoft_server_mode" -eq 1 ]]; then
+          collector_scope="local-session-server"
+          notes_json="$(kano_cpp_infra_tool_json_string "Microsoft.CodeCoverage.Console server-mode is local/session detached collection, not remote telemetry.")"
+        else
+          collector_scope="process-wrapper"
+        fi
+      elif [[ "$coverage_provider" == "llvm-cov" ]]; then
+        coverage_subject="llvm-instrumented-binary"
+        collector_scope="process-wrapper"
+      elif [[ "$coverage_provider" == "opencppcoverage" ]]; then
+        coverage_subject="normal-test-binary"
+        collector_scope="process-wrapper"
+      fi
+      ;;
+    pgo-gather|pgo-rebuild)
+      notes_json="$(kano_cpp_infra_tool_json_string "PGO lane only; coverage reports are not treated as training data.")"
+      ;;
+    *)
+      echo "Unsupported profile run mode: $mode" >&2
+      return 2
+      ;;
+  esac
+
+  if [[ "$coverage_provider" == "microsoft-codecoverage" && "$microsoft_server_mode" -eq 1 && "$mode" != "coverage-all" ]]; then
+    local extra_note
+    extra_note="$(kano_cpp_infra_tool_json_string "microsoftServerMode requested outside coverage-all; collectorScope remains mode-derived.")"
+    notes_json="${notes_json:+$notes_json,}$extra_note"
+  fi
+
+  mkdir -p "$(dirname "$out")"
+  {
+    printf '{\n'
+    printf '  "schemaVersion": "1.0",\n'
+    printf '  "profileRunMode": '; kano_cpp_infra_tool_json_string "$mode"; printf ',\n'
+    printf '  "compiler": '; kano_cpp_infra_tool_json_string "$compiler"; printf ',\n'
+    printf '  "coverageProvider": '; kano_cpp_infra_tool_json_string "$coverage_provider"; printf ',\n'
+    printf '  "pgoProvider": '; kano_cpp_infra_tool_json_string "$pgo_provider"; printf ',\n'
+    printf '  "unifiedExecution": %s,\n' "$unified_execution"
+    printf '  "unifiedProfileData": %s,\n' "$unified_profile_data"
+    printf '  "splitLanes": %s,\n' "$split_lanes"
+    printf '  "coverageSubject": '; kano_cpp_infra_tool_json_string "$coverage_subject"; printf ',\n'
+    printf '  "collectorScope": '; kano_cpp_infra_tool_json_string "$collector_scope"; printf ',\n'
+    printf '  "remoteTelemetry": false,\n'
+    printf '  "realUserProfile": false,\n'
+    printf '  "pgoDataPaths": '; kano_cpp_infra_tool_csv_json_array "$pgo_data_paths"; printf ',\n'
+    printf '  "coverageReportPaths": '; kano_cpp_infra_tool_csv_json_array "$coverage_report_paths"; printf ',\n'
+    printf '  "trainingCommand": '; kano_cpp_infra_tool_json_string "$training_command"; printf ',\n'
+    printf '  "coverageCommand": '; kano_cpp_infra_tool_json_string "$coverage_command"; printf ',\n'
+    printf '  "notes": [%s]\n' "$notes_json"
+    printf '}\n'
+  } > "$out"
+}
+
 kano_cpp_infra_tool_bootstrap_fallback() {
   local command_name="${1:-}"
   shift || true
@@ -125,6 +294,9 @@ kano_cpp_infra_tool_bootstrap_fallback() {
       ;;
     cmake-preset-exists)
       kano_cpp_infra_tool_bootstrap_cmake_preset_exists "$@"
+      ;;
+    profile-run-manifest)
+      kano_cpp_infra_tool_bootstrap_profile_run_manifest "$@"
       ;;
     *)
       return 127
@@ -142,7 +314,7 @@ kano_cpp_infra_tool() {
   fi
 
   case "${1:-}" in
-    cache-args-to-cmake|cache-args-with-pgo-mode|cmake-preset-exists)
+    cache-args-to-cmake|cache-args-with-pgo-mode|cmake-preset-exists|profile-run-manifest)
       kano_cpp_infra_tool_bootstrap_fallback "$@"
       return $?
       ;;

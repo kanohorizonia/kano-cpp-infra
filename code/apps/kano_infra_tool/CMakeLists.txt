@@ -8,6 +8,8 @@ target_compile_features(kano_infra_tool PRIVATE cxx_std_20)
 
 target_link_libraries(kano_infra_tool PRIVATE KanoInfra::process ${_jsoncpp_target})
 
-target_include_directories(kano_infra_tool PRIVATE ${_jsoncpp_include_dir})
+if(_jsoncpp_include_dir)
+    target_include_directories(kano_infra_tool PRIVATE ${_jsoncpp_include_dir})
+endif()
 
 install(TARGETS kano_infra_tool)

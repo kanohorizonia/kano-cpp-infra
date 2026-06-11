@@ -27,6 +27,29 @@ json_with_pgo_mode() {
   kano_cpp_infra_tool cache-args-with-pgo-mode "$in_mode"
 }
 
+json_with_pgo_cache_args() {
+  local in_mode="$1"
+  local raw
+  raw="$(json_with_pgo_mode "$in_mode")"
+  local shared_libs="${KANO_CPP_INFRA_PGO_BUILD_SHARED_LIBS:-OFF}"
+  local launcher="${KANO_CPP_INFRA_PGO_COMPILER_LAUNCHER:-none}"
+
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$raw" |
+      jq -c --arg shared_libs "$shared_libs" --arg launcher "$launcher" \
+        '. + {"BUILD_SHARED_LIBS": $shared_libs, "KOG_COMPILER_LAUNCHER": $launcher}'
+    return 0
+  fi
+
+  raw="${raw:-{}}"
+  raw="${raw%\}}"
+  if [[ "$raw" == "{" ]]; then
+    printf '{"BUILD_SHARED_LIBS":"%s","KOG_COMPILER_LAUNCHER":"%s"}\n' "$shared_libs" "$launcher"
+  else
+    printf '%s,"BUILD_SHARED_LIBS":"%s","KOG_COMPILER_LAUNCHER":"%s"}\n' "$raw" "$shared_libs" "$launcher"
+  fi
+}
+
 cmake_preset_exists() {
   local preset_name="$1"
   kano_cpp_infra_tool cmake-preset-exists "$CPP_ROOT/CMakePresets.json" "$preset_name"
@@ -162,6 +185,21 @@ pgo_compiler_id_for_preset() {
   esac
 }
 
+apply_pgo_compiler_launcher() {
+  export KOG_COMPILER_LAUNCHER="${KANO_CPP_INFRA_PGO_COMPILER_LAUNCHER:-none}"
+  unset KANO_CPP_INFRA_COMPILER_LAUNCHER_RESOLVED || true
+}
+
+restore_compiler_launcher() {
+  local original_value="${1:-}"
+  if [[ "$original_value" == "__KANO_UNSET__" ]]; then
+    unset KOG_COMPILER_LAUNCHER || true
+  else
+    export KOG_COMPILER_LAUNCHER="$original_value"
+  fi
+  unset KANO_CPP_INFRA_COMPILER_LAUNCHER_RESOLVED || true
+}
+
 remove_build_tree_for_reconfigure() {
   local in_path="$1"
   [[ -n "$in_path" ]] || return 0
@@ -234,6 +272,7 @@ run_collect_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-$(default_collect_build_preset)}"
   local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_compiler_launcher="${KOG_COMPILER_LAUNCHER:-__KANO_UNSET__}"
 
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
   export KANO_CPP_ROOT="$CPP_ROOT"
@@ -252,7 +291,8 @@ run_collect_build() {
       export KANO_CPP_INFRA_PGO_COMPILER_ID="$compiler_id"
     fi
   fi
-  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode collect)"
+  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_cache_args collect)"
+  apply_pgo_compiler_launcher
 
   # Clean the pgo-collect build dir to ensure MSVC is used (not a stale MinGW cache)
   local collect_obj_dir
@@ -276,21 +316,26 @@ run_collect_build() {
   fi
 
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
+  restore_compiler_launcher "$original_compiler_launcher"
 }
 
 run_use_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET:-$(default_use_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_USE_BUILD_PRESET:-$(default_use_build_preset)}"
   local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_compiler_launcher="${KOG_COMPILER_LAUNCHER:-__KANO_UNSET__}"
 
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
   export KANO_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET="$configure_preset"
   if is_windows_host; then
     export KANO_CPP_INFRA_PGO_COMPILER_ID="MSVC"
   fi
-  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode use)"
+  export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_cache_args use)"
+  apply_pgo_compiler_launcher
 
   clean_pgo_use_outputs "$configure_preset"
+  copy_msvc_pgd_to_use_dir
 
   if is_windows_host; then
     # shellcheck disable=SC1090
@@ -303,6 +348,7 @@ run_use_build() {
   fi
 
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
+  restore_compiler_launcher "$original_compiler_launcher"
 }
 
 prepare_pgo_collect_environment() {
@@ -372,6 +418,7 @@ run_pgo_test_stage() {
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
   export KANO_CPP_ROOT="$CPP_ROOT"
   export KANO_SKIP_TEST_BUILD="${KANO_SKIP_TEST_BUILD:-1}"
+  export KANO_ALLOW_APP_SMOKE_FALLBACK="${KANO_ALLOW_APP_SMOKE_FALLBACK:-1}"
   bash "$STAGES_ROOT/test-lane.sh" "$lane" "$preset"
 }
 
@@ -497,7 +544,6 @@ main() {
   if [[ "$stage" == "pgo-build" ]]; then
     prepare_pgo_collect_environment
     bash "$PGO_WORKFLOW_SH" merge
-    copy_msvc_pgd_to_use_dir
     run_use_build
     return 0
   fi
@@ -528,7 +574,6 @@ main() {
   fi
 
   bash "$PGO_WORKFLOW_SH" merge
-  copy_msvc_pgd_to_use_dir
   run_use_build
 }
 
