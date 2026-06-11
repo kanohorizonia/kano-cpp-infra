@@ -22,6 +22,67 @@ export KANO_CPP_INFRA_CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-$INF_CPP_ROOT}"
 # shellcheck source=/dev/null
 source "$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/build_metadata.sh"
 
+is_retryable_clang_frontend_crash() {
+  local log_file="$1"
+  [[ -f "$log_file" ]] || return 1
+  grep -Eq 'clang(\+\+)?: error: unable to execute command: Segmentation fault|clang frontend command failed due to signal' "$log_file"
+}
+
+cmake_build_attempts_for_host() {
+  local configured="${KANO_CPP_INFRA_CMAKE_BUILD_ATTEMPTS:-}"
+  if [[ -n "$configured" ]]; then
+    printf '%s\n' "$configured"
+    return 0
+  fi
+  if [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+    printf '%s\n' 2
+    return 0
+  fi
+  printf '%s\n' 1
+}
+
+run_cmake_build_with_retry() {
+  local build_preset="$1"
+  local max_attempts
+  max_attempts="$(cmake_build_attempts_for_host)"
+  case "$max_attempts" in
+    ''|*[!0-9]*) max_attempts=1 ;;
+  esac
+  if [[ "$max_attempts" -lt 1 ]]; then
+    max_attempts=1
+  fi
+
+  local attempt=1
+  local status=0
+  local log_file=""
+  local safe_preset="${build_preset//[^A-Za-z0-9_.-]/_}"
+
+  while true; do
+    log_file="${TMPDIR:-/tmp}/kano-cmake-build-${safe_preset}.$$.$attempt.log"
+    set +e
+    cmake --build --preset "$build_preset" 2>&1 | tee "$log_file"
+    status=${PIPESTATUS[0]}
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+      return 0
+    fi
+
+    if [[ "$attempt" -ge "$max_attempts" ]]; then
+      echo "[cmake-build] build failed after $attempt attempt(s): preset=$build_preset log=$log_file" >&2
+      return "$status"
+    fi
+
+    if ! is_retryable_clang_frontend_crash "$log_file"; then
+      echo "[cmake-build] build failed with non-retryable error: preset=$build_preset log=$log_file" >&2
+      return "$status"
+    fi
+
+    attempt=$((attempt + 1))
+    echo "[cmake-build] retrying after clang frontend crash: preset=$build_preset attempt=$attempt/$max_attempts" >&2
+  done
+}
+
 # =============================================================================
 # kano_cpp_run_unix_preset
 # =============================================================================
@@ -92,7 +153,7 @@ kano_cpp_run_unix_preset() {
     kano_cpp_collect_build_metadata
     kano_cpp_print_self_build_toolchain
     cmake --preset "$in_configure_preset" "${extra_args[@]}" "${cache_override_args[@]}"
-    cmake --build --preset "$in_build_preset"
+    run_cmake_build_with_retry "$in_build_preset"
   )
 }
 
