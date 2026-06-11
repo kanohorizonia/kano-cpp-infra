@@ -185,6 +185,11 @@ pgo_compiler_id_for_preset() {
   esac
 }
 
+preset_has_pgo_instrumentation() {
+  local preset="${1:-}"
+  [[ "$preset" == *pgo-collect* || "$preset" == *pgo-use* ]]
+}
+
 apply_pgo_compiler_launcher() {
   export KOG_COMPILER_LAUNCHER="${KANO_CPP_INFRA_PGO_COMPILER_LAUNCHER:-none}"
   unset KANO_CPP_INFRA_COMPILER_LAUNCHER_RESOLVED || true
@@ -348,6 +353,31 @@ run_use_build() {
   fi
 
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$original_cache_args"
+  restore_compiler_launcher "$original_compiler_launcher"
+}
+
+run_non_pgo_release_build() {
+  local configure_preset="${KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET:-$(default_use_configure_preset)}"
+  local build_preset="${KANO_CPP_INFRA_PGO_USE_BUILD_PRESET:-$(default_use_build_preset)}"
+  local original_compiler_launcher="${KOG_COMPILER_LAUNCHER:-__KANO_UNSET__}"
+
+  export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_ROOT="$CPP_ROOT"
+  export KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET="$configure_preset"
+  apply_pgo_compiler_launcher
+
+  echo "[pgo] non-PGO fallback build: configure=$configure_preset build=$build_preset" >&2
+
+  if is_windows_host; then
+    # shellcheck disable=SC1090
+    source "$WINDOWS_PRESET_BUILD_SH"
+    kano_windows_run_preset "$configure_preset" "$build_preset" "${KANO_CPP_INFRA_VCVARS_ARCH:-x64}"
+  else
+    # shellcheck disable=SC1090
+    source "$UNIX_PRESET_BUILD_SH"
+    kano_cpp_run_unix_preset "$configure_preset" "$build_preset"
+  fi
+
   restore_compiler_launcher "$original_compiler_launcher"
 }
 
@@ -544,8 +574,13 @@ main() {
 
   if [[ "$stage" == "pgo-build" ]]; then
     prepare_pgo_collect_environment
-    bash "$PGO_WORKFLOW_SH" merge
-    run_use_build
+    if preset_has_pgo_instrumentation "${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-}"; then
+      bash "$PGO_WORKFLOW_SH" merge
+      run_use_build
+    else
+      echo "[pgo] collect preset '${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-}' is not PGO-instrumented; skipping profile merge." >&2
+      run_non_pgo_release_build
+    fi
     return 0
   fi
 
