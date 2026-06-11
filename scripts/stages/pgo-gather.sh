@@ -77,6 +77,40 @@ is_truthy() {
   esac
 }
 
+is_windows_host() {
+  case "$(uname -s 2>/dev/null || true)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_macos_host() {
+  [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]
+}
+
+is_arm64_host() {
+  case "$(uname -m 2>/dev/null || true)" in
+    arm64|aarch64) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cmake_preset_exists() {
+  local preset_name="$1"
+  kano_cpp_infra_tool cmake-preset-exists "$CPP_ROOT/CMakePresets.json" "$preset_name"
+}
+
+first_existing_preset() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -n "$candidate" ]] && cmake_preset_exists "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 pgo_debug_log() {
   is_pgo_debug_enabled || return 0
   echo "[pgo-gather][debug] $*" >&2
@@ -194,35 +228,37 @@ resolve_collect_preset() {
 
   if [[ "$gather_mode" == "coverage" ]]; then
     # Use coverage presets to gather data (unified with PGO collect for comprehensive testing)
-    if [[ "$(uname -s 2>/dev/null || true)" == MINGW* || "$(uname -s 2>/dev/null || true)" == MSYS* || "$(uname -s 2>/dev/null || true)" == CYGWIN* ]]; then
-      printf '%s\n' "windows-ninja-msvc-coverage"
-      return 0
-    elif [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
-      if [[ "$(uname -m 2>/dev/null || true)" == "arm64" ]]; then
-        printf '%s\n' "macos-ninja-clang-arm64-coverage"
+    if is_windows_host; then
+      first_existing_preset windows-ninja-msvc-coverage windows-ninja-msvc windows-ninja-clang-coverage windows-ninja-clang
+      return $?
+    elif is_macos_host; then
+      if is_arm64_host; then
+        first_existing_preset macos-ninja-clang-arm64-coverage macos-ninja-clang-arm64 macos-ninja-clang-coverage macos-ninja-clang
       else
-        printf '%s\n' "macos-ninja-clang-x64-coverage"
+        first_existing_preset macos-ninja-clang-x64-coverage macos-ninja-clang-x64 macos-ninja-clang-coverage macos-ninja-clang
       fi
-      return 0
+      return $?
     fi
-    printf '%s\n' "linux-ninja-clang-coverage"
-    return 0
+    first_existing_preset linux-ninja-clang-coverage linux-ninja-gcc-coverage linux-ninja-clang linux-ninja-gcc
+    return $?
   fi
 
   # Default: PGO collect mode
-  if [[ "$(uname -s 2>/dev/null || true)" == MINGW* || "$(uname -s 2>/dev/null || true)" == MSYS* || "$(uname -s 2>/dev/null || true)" == CYGWIN* ]]; then
-    printf '%s\n' "windows-ninja-msvc-pgo-collect"
-    return 0
+  if is_windows_host; then
+    first_existing_preset windows-ninja-msvc-pgo-collect windows-ninja-msvc windows-ninja-clang-pgo-collect windows-ninja-clang
+    return $?
   fi
 
-  printf '%s\n' "linux-ninja-gcc-pgo-collect"
-}
+  if is_macos_host; then
+    if is_arm64_host; then
+      first_existing_preset macos-ninja-clang-arm64-pgo-collect macos-ninja-clang-arm64 macos-ninja-clang-pgo-collect macos-ninja-clang
+    else
+      first_existing_preset macos-ninja-clang-x64-pgo-collect macos-ninja-clang-x64 macos-ninja-clang-pgo-collect macos-ninja-clang
+    fi
+    return $?
+  fi
 
-is_windows_host() {
-  case "$(uname -s 2>/dev/null || true)" in
-    MINGW*|MSYS*|CYGWIN*) return 0 ;;
-    *) return 1 ;;
-  esac
+  first_existing_preset linux-ninja-gcc-pgo-collect linux-ninja-gcc linux-ninja-clang-pgo-collect linux-ninja-clang
 }
 
 ensure_windows_pgo_runtime_path() {

@@ -537,6 +537,7 @@ main() {
   resolve_profile_manifest
 
   if [[ "$stage" == "profile-gather" ]]; then
+    prepare_pgo_collect_environment
     run_gather_stage
     return 0
   fi
