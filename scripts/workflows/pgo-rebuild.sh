@@ -32,6 +32,20 @@ cmake_preset_exists() {
   kano_cpp_infra_tool cmake-preset-exists "$CPP_ROOT/CMakePresets.json" "$preset_name"
 }
 
+cmake_preset_binary_dir() {
+  local preset_name="$1"
+  [[ -f "$CPP_ROOT/CMakePresets.json" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  local binary_dir
+  binary_dir="$(
+    jq -r --arg name "$preset_name" '
+      .configurePresets[]? | select(.name == $name) | .binaryDir // empty
+    ' "$CPP_ROOT/CMakePresets.json" | head -n 1
+  )"
+  [[ -n "$binary_dir" && "$binary_dir" != "null" ]] || return 1
+  printf '%s\n' "${binary_dir//\$\{sourceDir\}/$CPP_ROOT}"
+}
+
 first_existing_preset() {
   local candidate
   for candidate in "$@"; do
@@ -148,6 +162,74 @@ pgo_compiler_id_for_preset() {
   esac
 }
 
+remove_build_tree_for_reconfigure() {
+  local in_path="$1"
+  [[ -n "$in_path" ]] || return 0
+  [[ -d "$in_path" ]] || return 0
+
+  local trash_path="${in_path}.delete-$RANDOM-$$"
+  if mv "$in_path" "$trash_path" 2>/dev/null; then
+    local attempt
+    for attempt in 1 2 3; do
+      chmod -R u+w "$trash_path" 2>/dev/null || true
+      if rm -rf "$trash_path" 2>/dev/null; then
+        return 0
+      fi
+      sleep "$attempt"
+    done
+    echo "[pgo] warning: stale build dir moved aside but not fully deleted: $trash_path" >&2
+    return 0
+  fi
+
+  local attempt
+  for attempt in 1 2 3; do
+    chmod -R u+w "$in_path" 2>/dev/null || true
+    if rm -rf "$in_path" 2>/dev/null; then
+      return 0
+    fi
+    sleep "$attempt"
+  done
+
+  if [[ -d "$in_path" ]]; then
+    echo "[pgo] failed to clean stale build dir: $in_path" >&2
+    return 1
+  fi
+}
+
+clean_pgo_use_outputs() {
+  local configure_preset="$1"
+  if [[ "${KANO_CPP_INFRA_PGO_USE_CLEAN:-1}" == "0" ]]; then
+    echo "[pgo] preserving pgo-use outputs because KANO_CPP_INFRA_PGO_USE_CLEAN=0" >&2
+    return 0
+  fi
+
+  local binary_dir=""
+  binary_dir="$(cmake_preset_binary_dir "$configure_preset" 2>/dev/null || true)"
+  local candidates=()
+  if [[ -n "$binary_dir" ]]; then
+    candidates+=("$binary_dir")
+  fi
+  candidates+=(
+    "$CPP_ROOT/out/obj/$configure_preset"
+    "$CPP_ROOT/out/bin/$configure_preset"
+    "$CPP_ROOT/out/lib/$configure_preset"
+  )
+
+  local seen="|"
+  local stale_path
+  for stale_path in "${candidates[@]}"; do
+    [[ -n "$stale_path" ]] || continue
+    case "$seen" in
+      *"|$stale_path|"*) continue ;;
+    esac
+    seen="${seen}${stale_path}|"
+    if [[ -d "$stale_path" ]]; then
+      echo "[pgo] cleaning stale pgo-use output: $stale_path" >&2
+      remove_build_tree_for_reconfigure "$stale_path"
+    fi
+  done
+}
+
 run_collect_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-$(default_collect_build_preset)}"
@@ -173,7 +255,11 @@ run_collect_build() {
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode collect)"
 
   # Clean the pgo-collect build dir to ensure MSVC is used (not a stale MinGW cache)
-  local collect_obj_dir="$CPP_ROOT/out/obj/$configure_preset"
+  local collect_obj_dir
+  collect_obj_dir="$(cmake_preset_binary_dir "$configure_preset" 2>/dev/null || true)"
+  if [[ -z "$collect_obj_dir" ]]; then
+    collect_obj_dir="$CPP_ROOT/out/obj/$configure_preset"
+  fi
   if [[ -d "$collect_obj_dir" ]]; then
     echo "[pgo] cleaning stale collect build dir: $collect_obj_dir" >&2
     rm -rf "$collect_obj_dir"
@@ -203,6 +289,8 @@ run_use_build() {
     export KANO_CPP_INFRA_PGO_COMPILER_ID="MSVC"
   fi
   export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$(json_with_pgo_mode use)"
+
+  clean_pgo_use_outputs "$configure_preset"
 
   if is_windows_host; then
     # shellcheck disable=SC1090
