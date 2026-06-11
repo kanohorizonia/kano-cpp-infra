@@ -25,7 +25,7 @@ source "$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/build_metadata.sh"
 is_retryable_clang_frontend_crash() {
   local log_file="$1"
   [[ -f "$log_file" ]] || return 1
-  grep -Eq 'clang(\+\+)?: error: unable to execute command: Segmentation fault|clang frontend command failed due to signal' "$log_file"
+  grep -Eq 'clang(\+\+)?: error: unable to execute command: Segmentation fault|clang frontend command failed due to signal|clang frontend command failed with exit code 139' "$log_file"
 }
 
 cmake_build_attempts_for_host() {
