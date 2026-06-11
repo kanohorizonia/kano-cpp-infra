@@ -25,6 +25,8 @@ source "$SCRIPT_DIR/matrix.sh"
 source "$SCRIPT_DIR/report_skill_adapter.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/python_resolver.sh"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/native_tool.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Coverage directories
@@ -118,7 +120,7 @@ coverage_resolve_llvm_tool() {
     local fallback_env_var="$3"
     local explicit="${!env_var:-}"
     local fallback="${!fallback_env_var:-}"
-    local candidate
+    local candidate base_dir
     for candidate in \
         "$explicit" \
         "$fallback" \
@@ -139,6 +141,24 @@ coverage_resolve_llvm_tool() {
             return 0
         fi
     done
+    if _is_windows; then
+        for base_dir in \
+            "${KANO_LLVM_BIN:-}" \
+            "${LLVM_BIN:-}" \
+            "/c/Program Files/LLVM/bin" \
+            "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/x64/bin" \
+            "/c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/Llvm/bin" \
+            "/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin" \
+            "/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin"; do
+            [[ -n "$base_dir" ]] || continue
+            for candidate in "$base_dir/$tool.exe" "$base_dir/$tool"; do
+                if [[ -x "$candidate" ]]; then
+                    printf '%s\n' "$candidate"
+                    return 0
+                fi
+            done
+        done
+    fi
     if command -v xcrun >/dev/null 2>&1; then
         candidate="$(xcrun -f "$tool" 2>/dev/null || true)"
         if [[ -n "$candidate" && -x "$candidate" ]]; then
@@ -246,6 +266,32 @@ coverage_ensure_dirs() {
     mkdir -p "$INF_COVERAGE_HTML_DIR"
 }
 
+coverage_cache_args_with_default() {
+    local raw_json="${1:-}"
+    local key="$2"
+    local value="$3"
+
+    if [[ "$raw_json" == *"\"$key\""* ]]; then
+        printf '%s\n' "$raw_json"
+        return 0
+    fi
+
+    raw_json="${raw_json:-{}}"
+    raw_json="${raw_json%"${raw_json##*[![:space:]]}"}"
+    raw_json="${raw_json%\}}"
+    if [[ "$raw_json" == "{" ]]; then
+        printf '{"%s":"%s"}\n' "$key" "$value"
+    else
+        printf '%s,"%s":"%s"}\n' "$raw_json" "$key" "$value"
+    fi
+}
+
+coverage_prepare_windows_cmake_cache_args() {
+    local raw_json="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-${INF_CMAKE_CACHE_ARGS_JSON:-}}"
+    raw_json="$(coverage_cache_args_with_default "$raw_json" "BUILD_SHARED_LIBS" "OFF")"
+    export KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON="$raw_json"
+}
+
 coverage_json_escape() {
     local value="${1:-}"
     value="${value//\\/\\\\}"
@@ -320,6 +366,22 @@ coverage_resolve_opencppcoverage() {
 coverage_is_windows_preset() {
     local preset="${1:-}"
     _is_windows && [[ "$preset" == windows-* ]]
+}
+
+coverage_is_windows_msvc_preset() {
+    local preset="${1:-}"
+    _is_windows && [[ "$preset" == windows-* && "$preset" != *clang* ]]
+}
+
+coverage_compiler_id_for_preset() {
+    local preset="${1:-}"
+    local fallback="${2:-unknown}"
+    case "$preset" in
+        *clang*) printf '%s\n' "Clang" ;;
+        *gcc*) printf '%s\n' "GNU" ;;
+        *msvc*) printf '%s\n' "MSVC" ;;
+        *) printf '%s\n' "$fallback" ;;
+    esac
 }
 
 coverage_cobertura_lines_valid() {
@@ -545,6 +607,7 @@ coverage_render_cobertura_html() {
 
     if [[ ! -f "$cobertura_xml" ]]; then
         echo "[coverage_report] WARNING: Cobertura XML not found: $cobertura_xml" >&2
+        rm -rf "$INF_COVERAGE_HTML_DIR"
         coverage_write_status "UNAVAILABLE" "MISSING_COBERTURA" "$cobertura_xml"
         return 0
     fi
@@ -552,6 +615,7 @@ coverage_render_cobertura_html() {
     lines_valid="$(coverage_cobertura_lines_valid "$cobertura_xml")"
     if [[ "$lines_valid" -le 0 ]]; then
         echo "[coverage_report] WARNING: Cobertura XML has no valid lines: $cobertura_xml" >&2
+        rm -rf "$INF_COVERAGE_HTML_DIR"
         coverage_write_status "UNAVAILABLE" "EMPTY_COBERTURA" "$cobertura_xml"
         return 0
     fi
@@ -648,6 +712,7 @@ coverage_build() {
             export INF_CPP_ROOT="$cpp_root"
             export KANO_CPP_INFRA_CPP_ROOT="$cpp_root"
             export KANO_CPP_ROOT="$cpp_root"
+            coverage_prepare_windows_cmake_cache_args
             # shellcheck disable=SC1090
             source "$windows_helper"
             kano_windows_run_preset "$preset" "$windows_build_preset" "${KANO_CPP_INFRA_VCVARS_ARCH:-x64}"
@@ -786,13 +851,14 @@ coverage_run_tests() {
     if [[ -z "$preset" ]]; then
         preset="$(coverage_default_configure_preset || true)"
     fi
+    compiler_id="$(coverage_compiler_id_for_preset "$preset" "$compiler_id")"
 
     # Auto-detect test binary
     if [[ -z "$test_binary" ]]; then
         test_binary="$(coverage_default_test_binary "$platform")"
     fi
 
-    if coverage_is_windows_preset "$preset"; then
+    if coverage_is_windows_msvc_preset "$preset"; then
         coverage_run_windows_opencppcoverage "$preset" "$test_binary"
         return
     fi
@@ -813,7 +879,11 @@ coverage_run_tests() {
     rm -f "$INF_COVERAGE_PROFRAW_DIR"/*.profraw 2>/dev/null || true
 
     # Set LLVM_PROFILE_FILE and run
-    export LLVM_PROFILE_FILE="$INF_COVERAGE_PROFRAW_DIR/%m.profraw"
+    if _is_windows; then
+        export LLVM_PROFILE_FILE="$(coverage_to_windows_path "$INF_COVERAGE_PROFRAW_DIR/%m.profraw")"
+    else
+        export LLVM_PROFILE_FILE="$INF_COVERAGE_PROFRAW_DIR/%m.profraw"
+    fi
 
     (
         cd "$cpp_root"
@@ -847,7 +917,11 @@ coverage_merge() {
 
     coverage_ensure_dirs
 
-    if coverage_is_windows_preset "$(coverage_default_configure_preset || true)"; then
+    local default_preset
+    default_preset="$(coverage_default_configure_preset || true)"
+    compiler_id="$(coverage_compiler_id_for_preset "$default_preset" "$compiler_id")"
+
+    if coverage_is_windows_msvc_preset "$default_preset"; then
         if [[ -f "$INF_COVERAGE_ROOT/cobertura.xml" ]]; then
             echo "[coverage_merge] Windows Cobertura coverage is already normalized: $INF_COVERAGE_ROOT/cobertura.xml"
             return 0
@@ -919,6 +993,7 @@ coverage_report() {
     if [[ -z "$preset" ]]; then
         preset="$(coverage_default_configure_preset || true)"
     fi
+    compiler_id="$(coverage_compiler_id_for_preset "$preset" "$compiler_id")"
 
     # Auto-detect test binary
     if [[ -z "$test_binary" ]]; then
@@ -934,7 +1009,7 @@ coverage_report() {
         return 0
     fi
 
-    if coverage_is_windows_preset "$preset"; then
+    if coverage_is_windows_msvc_preset "$preset"; then
         coverage_render_cobertura_html "$INF_COVERAGE_ROOT/cobertura.xml"
         return
     fi
@@ -955,6 +1030,7 @@ coverage_report() {
         fi
 
         # HTML report
+        rm -rf "$INF_COVERAGE_HTML_DIR"
         mkdir -p "$INF_COVERAGE_HTML_DIR"
         echo "[coverage_report] Generating HTML report..."
         "$llvm_cov" show \
@@ -969,10 +1045,41 @@ coverage_report() {
         # Text summary
         echo ""
         echo "[coverage_report] Text summary:"
-        "$llvm_cov" report \
+        local summary_txt="$INF_COVERAGE_ROOT/summary.txt"
+        if "$llvm_cov" report \
             "$binary_path" \
             -instr-profile="$INF_COVERAGE_PROFDATA" \
-            --ignore-filename-regex="_deps|catch2|ftxui|thirdparty|build|\.vcpkg" 2>&1 || true
+            --ignore-filename-regex="_deps|catch2|ftxui|thirdparty|build|\.vcpkg" \
+            > "$summary_txt" 2>&1; then
+            cat "$summary_txt"
+        else
+            cat "$summary_txt" 2>/dev/null || true
+            echo "[coverage_report] WARNING: llvm-cov report failed; continuing with other coverage artifacts." >&2
+        fi
+
+        local llvm_json="$INF_COVERAGE_ROOT/coverage.llvm.json"
+        local cobertura_xml="$INF_COVERAGE_ROOT/cobertura.xml"
+        if "$llvm_cov" export \
+            "$binary_path" \
+            -instr-profile="$INF_COVERAGE_PROFDATA" \
+            --format=text \
+            --ignore-filename-regex="_deps|catch2|ftxui|thirdparty|build|\.vcpkg" \
+            > "$llvm_json" 2>/dev/null; then
+            if kano_cpp_infra_tool llvm-json-to-cobertura "$llvm_json" "$(coverage_cpp_root)" "$cobertura_xml" 2>/dev/null; then
+                coverage_normalize_cobertura_for_jenkins "$cobertura_xml" "$cobertura_xml"
+                local lines_valid
+                lines_valid="$(coverage_cobertura_lines_valid "$cobertura_xml")"
+                if [[ "$lines_valid" -gt 0 ]]; then
+                    coverage_write_status "VALID" "LLVM_COBERTURA_READY" "$cobertura_xml"
+                else
+                    coverage_write_status "UNAVAILABLE" "EMPTY_LLVM_COBERTURA" "$cobertura_xml"
+                fi
+            else
+                coverage_write_status "TOOL_FAILED" "LLVM_COBERTURA_CONVERSION_FAILED" "$llvm_json"
+            fi
+        else
+            coverage_write_status "TOOL_FAILED" "LLVM_EXPORT_FAILED" "$llvm_json"
+        fi
 
         echo ""
         echo "[coverage_report] HTML report: $INF_COVERAGE_HTML_DIR/index.html"

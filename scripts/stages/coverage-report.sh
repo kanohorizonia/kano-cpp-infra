@@ -25,7 +25,12 @@ if [[ -z "${INF_COVERAGE_ROOT:-}" ]]; then
 fi
 
 case "$(kano_cpp_infra_matrix_host_os)" in
-  win64) default_command=(report windows-ninja-msvc-coverage) ;;
+  win64)
+    configure_preset="$(kano_cpp_infra_matrix_default_coverage_configure_preset || true)"
+    if [[ -n "$configure_preset" ]]; then
+      default_command=(report "$configure_preset")
+    fi
+    ;;
 esac
 
 if [[ "$#" -gt 0 ]]; then

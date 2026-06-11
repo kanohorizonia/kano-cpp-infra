@@ -72,6 +72,45 @@ report_skill_load() {
   export KANO_CPP_TEST_SKILL_ROOT="$skill_root"
 }
 
+report_skill_copy_file_if_present() {
+  local source_path="${1:-}"
+  local target_path="${2:-}"
+  [[ -n "$source_path" && -n "$target_path" && -f "$source_path" ]] || return 0
+  mkdir -p "$(dirname "$target_path")"
+  cp -f "$source_path" "$target_path"
+}
+
+report_skill_prepare_coverage_input() {
+  local source_dir="${INF_COVERAGE_ROOT:-}"
+  local target_dir="${KANO_COVERAGE_REPORT_DIR:-}"
+  local report_slug="${KANO_REPORT_SLUG:-coverage}"
+
+  if [[ -z "$source_dir" || ! -d "$source_dir" ]]; then
+    source_dir="$KANO_CPP_INFRA_CPP_ROOT/out/coverage"
+  fi
+  [[ -d "$source_dir" ]] || return 0
+
+  if [[ -z "$target_dir" ]]; then
+    target_dir="${KANO_COVERAGE_REPORTS_ROOT:-$KANO_REPORT_ROOT/coverage-reports}/$report_slug"
+  fi
+
+  mkdir -p "$target_dir"
+  report_skill_copy_file_if_present "$source_dir/cobertura.xml" "$target_dir/cobertura.xml"
+  report_skill_copy_file_if_present "$source_dir/coverage.xml" "$target_dir/coverage.xml"
+  report_skill_copy_file_if_present "$source_dir/summary.txt" "$target_dir/summary.txt"
+  report_skill_copy_file_if_present "$source_dir/coverage-status.json" "$target_dir/coverage-status.json"
+  report_skill_copy_file_if_present "$source_dir/coverage-status.md" "$target_dir/coverage-status.md"
+
+  if [[ -d "$source_dir/html" ]]; then
+    rm -rf "$target_dir/report-html"
+    mkdir -p "$target_dir"
+    cp -a "$source_dir/html" "$target_dir/report-html"
+  fi
+
+  export KANO_COVERAGE_REPORT_DIR="$target_dir"
+  export KANO_COVERAGE_HTML_DIR="${KANO_COVERAGE_HTML_DIR:-$target_dir/report-html}"
+}
+
 report_skill_package() {
   if [[ -z "${KANO_CPP_TEST_SKILL_ROOT:-}" ]]; then
     echo "[ERROR] report_skill_load must be called before report_skill_package" >&2
@@ -91,6 +130,8 @@ report_skill_package() {
     cp -f "$suite_map_src" "$KANO_REPORT_ROOT/raw/suite-map.kano-git-master.json"
     export KANO_TEST_SUITE_MAP_REL="raw/suite-map.kano-git-master.json"
   fi
+
+  report_skill_prepare_coverage_input
 
   bash "$KANO_CPP_TEST_SKILL_ROOT/src/shell/reports/common/package-reports.sh" "$@"
 }

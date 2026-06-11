@@ -25,7 +25,12 @@ fi
 coverage_script="$(kano_cpp_infra_matrix_default_coverage_gather_script)"
 default_args=()
 case "$(kano_cpp_infra_matrix_host_os)" in
-  win64) default_args=(windows-ninja-msvc-coverage) ;;
+  win64)
+    configure_preset="$(kano_cpp_infra_matrix_default_coverage_configure_preset || true)"
+    if [[ -n "$configure_preset" ]]; then
+      default_args=("$configure_preset")
+    fi
+    ;;
 esac
 
 if [[ "$#" -eq 0 ]]; then

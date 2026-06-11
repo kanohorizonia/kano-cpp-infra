@@ -56,7 +56,7 @@ kano_cpp_infra_matrix_default_coverage_configure_preset() {
   arch="$(kano_cpp_infra_matrix_arch)"
   case "$os_name" in
     win64)
-      kano_cpp_infra_matrix_first_existing_preset windows-ninja-msvc-coverage windows-ninja-msvc
+      kano_cpp_infra_matrix_first_existing_preset windows-ninja-clang-coverage windows-ninja-msvc-coverage windows-ninja-msvc
       ;;
     mac)
       if [[ "$arch" == "arm64" ]]; then
@@ -90,6 +90,7 @@ kano_cpp_infra_matrix_default_coverage_build_preset() {
   case "$os_name" in
     win64)
       kano_cpp_infra_matrix_first_existing_preset \
+        windows-ninja-clang-coverage-debug \
         windows-ninja-msvc-coverage-debug \
         windows-ninja-msvc-debug
       ;;

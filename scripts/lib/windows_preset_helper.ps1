@@ -384,6 +384,40 @@ function Get-PixiNinjaPath([string]$ProjectRoot) {
   }
 }
 
+function Get-LlvmToolPrefix {
+  $candidates = New-Object System.Collections.Generic.List[string]
+  if ($env:KANO_LLVM_BIN) { [void]$candidates.Add($env:KANO_LLVM_BIN) }
+  if ($env:LLVM_BIN) { [void]$candidates.Add($env:LLVM_BIN) }
+  [void]$candidates.Add("C:\Program Files\LLVM\bin")
+  [void]$candidates.Add("C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\Llvm\x64\bin")
+  [void]$candidates.Add("C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\Llvm\bin")
+  [void]$candidates.Add("C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\x64\bin")
+  [void]$candidates.Add("C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\Llvm\bin")
+
+  foreach ($candidate in $candidates) {
+    if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+    $clang = Join-Path $candidate "clang-cl.exe"
+    $profdata = Join-Path $candidate "llvm-profdata.exe"
+    $cov = Join-Path $candidate "llvm-cov.exe"
+    if ((Test-ValidExecutable $clang) -and (Test-ValidExecutable $profdata) -and (Test-ValidExecutable $cov)) {
+      return (Resolve-Path -LiteralPath $candidate).Path
+    }
+  }
+
+  return $null
+}
+
+function Get-OptionalLlvmPathStep([string]$ConfigurePreset) {
+  if ([string]::IsNullOrWhiteSpace($ConfigurePreset) -or ($ConfigurePreset -notmatch "clang")) {
+    return ""
+  }
+  $llvmPrefix = Get-LlvmToolPrefix
+  if ([string]::IsNullOrWhiteSpace($llvmPrefix)) {
+    throw "LLVM tools are required for clang preset '$ConfigurePreset'. Install LLVM or set KANO_LLVM_BIN."
+  }
+  return ('set "PATH={0};%PATH%"' -f $llvmPrefix)
+}
+
 function Invoke-CmdChain([string]$CmdLine) {
   cmd.exe /d /s /c $CmdLine
   if (-not $?) { exit $LASTEXITCODE }
@@ -446,6 +480,7 @@ function Run-Preset {
   Invoke-CmdSteps @(
     $vcvarsCommand,
     'if errorlevel 1 exit /b %errorlevel%',
+    (Get-OptionalLlvmPathStep -ConfigurePreset $ConfigurePreset),
     'set "CC="',
     'set "CXX="',
     $configureCommand,
@@ -483,6 +518,7 @@ function Configure-Preset {
   Invoke-CmdSteps @(
     $vcvarsCommand,
     'if errorlevel 1 exit /b %errorlevel%',
+    (Get-OptionalLlvmPathStep -ConfigurePreset $ConfigurePreset),
     'set "CC="',
     'set "CXX="',
     $configureCommand
