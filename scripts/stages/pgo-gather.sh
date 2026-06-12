@@ -32,6 +32,14 @@
 #       infrastructure smoke; full functional coverage belongs in the later test
 #       stage, not the PGO profile-gather stage.
 #
+#   KANO_CPP_INFRA_PGO_GATHER_TEST_BINARY
+#       Override the gather test binary for non-git-master consumers. Falls back
+#       to KANO_TEST_BINARY_NAME when set.
+#
+#   KANO_CPP_INFRA_PGO_GATHER_TEST_FILTER
+#       Override the filter used with KANO_CPP_INFRA_PGO_GATHER_TEST_BINARY.
+#       Empty means run all tests in that binary.
+#
 #   KANO_CPP_INFRA_PGO_GATHER_COMMIT_PLAN_FILTER
 #   KANO_CPP_INFRA_PGO_GATHER_EXPORT_FILTER
 #   KANO_CPP_INFRA_PGO_GATHER_TUI_FILTER
@@ -152,6 +160,8 @@ salvage_windows_opencppcoverage_for_tui() {
   local in_reports_dir="$2"
   local in_coverage_dir="$3"
   local in_logs_dir="$4"
+  local in_label="${5:-kano_git_tui_tests}"
+  local in_filter="${6:-[unit],[property]}"
 
   [[ -f "$in_candidate" ]] || return 1
   _has_opencppcoverage || return 1
@@ -159,10 +169,12 @@ salvage_windows_opencppcoverage_for_tui() {
   local occ_bin
   occ_bin="$(_resolve_opencppcoverage)"
   local src_win="$(_to_win_path "$CPP_ROOT/code")"
-  local cov_out="$in_coverage_dir/kano_git_tui_tests_salvage.cobertura.xml"
+  local safe_label
+  safe_label="$(printf '%s' "$in_label" | tr -c 'A-Za-z0-9_.-' '_')"
+  local cov_out="$in_coverage_dir/${safe_label}_salvage.cobertura.xml"
   local cov_win="$(_to_win_path "$cov_out")"
   local bin_win="$(_to_win_path "$in_candidate")"
-  local junit_tmp="$(_to_win_path "$in_reports_dir/kano_git_tui_tests_salvage.xml.tmp")"
+  local junit_tmp="$(_to_win_path "$in_reports_dir/${safe_label}_salvage.xml.tmp")"
   local cov_lines_valid="0"
 
   _cov_lines_valid() {
@@ -171,34 +183,26 @@ salvage_windows_opencppcoverage_for_tui() {
 
   _run_salvage() {
     local mode="$1"
-    if [[ "$mode" == "filtered" ]]; then
-      MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
-        --sources "$src_win" \
-        --cover_children \
-        --export_type "cobertura:$cov_win" \
-        --quiet \
-        -- "$bin_win" \
-          --order lex --rng-seed 1337 --durations yes "[unit],[property]" \
-          --reporter junit "--out=$junit_tmp" \
-          >"$in_logs_dir/kano_git_tui_tests_salvage.log" 2>&1
-    else
-      MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
-        --sources "$src_win" \
-        --cover_children \
-        --export_type "cobertura:$cov_win" \
-        --quiet \
-        -- "$bin_win" \
-          --order lex --rng-seed 1337 --durations yes \
-          --reporter junit "--out=$junit_tmp" \
-          >"$in_logs_dir/kano_git_tui_tests_salvage.log" 2>&1
+    local -a test_args=(--order lex --rng-seed 1337 --durations yes)
+    if [[ "$mode" == "filtered" && -n "$in_filter" ]]; then
+      test_args+=("$in_filter")
     fi
+    test_args+=(--reporter junit "--out=$junit_tmp")
+
+    MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
+      --sources "$src_win" \
+      --cover_children \
+      --export_type "cobertura:$cov_win" \
+      --quiet \
+      -- "$bin_win" "${test_args[@]}" \
+      >"$in_logs_dir/${safe_label}_salvage.log" 2>&1
   }
 
-  echo "[pgo-gather] attempting OpenCppCoverage salvage pass for kano_git_tui_tests" >&2
+  echo "[pgo-gather] attempting OpenCppCoverage salvage pass for $in_label" >&2
   if _run_salvage filtered; then
     cov_lines_valid="$(_cov_lines_valid "$cov_out")"
     if [[ "$cov_lines_valid" -gt 0 ]]; then
-      mv -f "$in_reports_dir/kano_git_tui_tests_salvage.xml.tmp" "$in_reports_dir/kano_git_tui_tests_salvage.xml" 2>/dev/null || true
+      mv -f "$in_reports_dir/${safe_label}_salvage.xml.tmp" "$in_reports_dir/${safe_label}_salvage.xml" 2>/dev/null || true
       echo "[pgo-gather] OpenCppCoverage salvage pass completed (lines-valid=$cov_lines_valid)" >&2
       return 0
     fi
@@ -208,7 +212,7 @@ salvage_windows_opencppcoverage_for_tui() {
   if _run_salvage all; then
     cov_lines_valid="$(_cov_lines_valid "$cov_out")"
     if [[ "$cov_lines_valid" -gt 0 ]]; then
-      mv -f "$in_reports_dir/kano_git_tui_tests_salvage.xml.tmp" "$in_reports_dir/kano_git_tui_tests_salvage.xml" 2>/dev/null || true
+      mv -f "$in_reports_dir/${safe_label}_salvage.xml.tmp" "$in_reports_dir/${safe_label}_salvage.xml" 2>/dev/null || true
       echo "[pgo-gather] OpenCppCoverage salvage (all-tests) completed (lines-valid=$cov_lines_valid)" >&2
       return 0
     fi
@@ -948,25 +952,35 @@ run_collect_tests_default() {
   local commit_plan_training_filter="${KANO_CPP_INFRA_PGO_GATHER_COMMIT_PLAN_FILTER:-[Unit][SerializePlanJson]}"
   local export_training_filter="${KANO_CPP_INFRA_PGO_GATHER_EXPORT_FILTER:-[tdd][unit][feature:kog-export-upload][config]}"
   local tui_training_filter="${KANO_CPP_INFRA_PGO_GATHER_TUI_FILTER:-[unit]}"
+  local configured_training_binary="${KANO_CPP_INFRA_PGO_GATHER_TEST_BINARY:-${KANO_TEST_BINARY_NAME:-}}"
+  local configured_training_filter="${KANO_CPP_INFRA_PGO_GATHER_TEST_FILTER:-${KANO_CPP_INFRA_PGO_GATHER_CLI_FILTER:-}}"
 
-  # - CLI smoke path
-  # - commit-plan engine + properties
-  # - export/archive paths
-  # - TUI command-state/autocomplete paths
-  local -a suite=(
-    "kano_git_cli_tests|$cli_training_filter"
-    "kano_git_commit_plan_tests|$commit_plan_training_filter"
-    "kano_git_export_tests|$export_training_filter"
-    "kano_git_tui_tests|$tui_training_filter"
-  )
+  local -a suite=()
+  if [[ -n "$configured_training_binary" ]]; then
+    echo "[pgo-gather] using configured gather test binary: $configured_training_binary" >&2
+    suite=("$configured_training_binary|$configured_training_filter")
+  else
+    # - CLI smoke path
+    # - commit-plan engine + properties
+    # - export/archive paths
+    # - TUI command-state/autocomplete paths
+    suite=(
+      "kano_git_cli_tests|$cli_training_filter"
+      "kano_git_commit_plan_tests|$commit_plan_training_filter"
+      "kano_git_export_tests|$export_training_filter"
+      "kano_git_tui_tests|$tui_training_filter"
+    )
+  fi
 
   # Quick mode keeps the full PGO workflow but reduces gather runtime by
   # running only a minimal representative test subset.
   if [[ "${KANO_CPP_INFRA_PGO_GATHER_QUICK:-0}" == "1" ]]; then
     echo "[pgo-gather] quick mode enabled: reduced gather suite" >&2
-    suite=(
-      "kano_git_tui_tests|$tui_training_filter"
-    )
+    if [[ -z "$configured_training_binary" ]]; then
+      suite=(
+        "kano_git_tui_tests|$tui_training_filter"
+      )
+    fi
   fi
 
   local -a collected_binaries=()
@@ -979,6 +993,9 @@ run_collect_tests_default() {
     IFS='|' read -r test_bin filter <<< "$suite_entry"
     label="${test_bin}"
     candidate="$bin_root/$test_bin$exe_ext"
+    if [[ ! -f "$candidate" ]]; then
+      candidate="$bin_root/$test_bin"
+    fi
     suite_index=$((suite_index + 1))
     local progress_tag="[$suite_index/$suite_total]"
 
@@ -1029,19 +1046,27 @@ run_collect_tests_default() {
         echo "[pgo-gather] fallback disabled: skipping OpenCppCoverage retry after empty Microsoft Cobertura" >&2
       else
       local previous_coverage_tool="${KANO_CPP_INFRA_COVERAGE_TOOL:-}"
-      echo "[pgo-gather] Microsoft coverage produced only empty Cobertura reports; retrying kano_git_tui_tests with OpenCppCoverage" >&2
+      local fallback_entry="${suite[0]:-kano_git_tui_tests|[unit],[property]}"
+      local fallback_label fallback_filter fallback_candidate
+      IFS='|' read -r fallback_label fallback_filter <<< "$fallback_entry"
+      fallback_candidate="${collected_binaries[0]:-$bin_root/$fallback_label$exe_ext}"
+      if [[ ! -f "$fallback_candidate" ]]; then
+        fallback_candidate="$bin_root/$fallback_label"
+      fi
+
+      echo "[pgo-gather] Microsoft coverage produced only empty Cobertura reports; retrying $fallback_label with OpenCppCoverage" >&2
       export KANO_CPP_INFRA_COVERAGE_TOOL="opencppcoverage"
       if run_collect_case \
-        "$bin_root/kano_git_tui_tests$exe_ext" \
-        "kano_git_tui_tests" \
-        "[unit],[property]" \
+        "$fallback_candidate" \
+        "$fallback_label" \
+        "$fallback_filter" \
         "$reports_dir" \
         "$logs_dir" \
         "$coverage_raw_dir" \
         "[fallback]"; then
-        echo "[pgo-gather] OpenCppCoverage fallback for kano_git_tui_tests completed" >&2
+        echo "[pgo-gather] OpenCppCoverage fallback for $fallback_label completed" >&2
       else
-        echo "[pgo-gather] warning: OpenCppCoverage fallback for kano_git_tui_tests failed" >&2
+        echo "[pgo-gather] warning: OpenCppCoverage fallback for $fallback_label failed" >&2
       fi
 
       nonempty_count="$(count_nonempty_cobertura_files "$coverage_raw_dir")"
@@ -1052,14 +1077,18 @@ run_collect_tests_default() {
         echo "[pgo-gather] OpenCppCoverage wrapper path still empty; running direct OpenCppCoverage fallback command" >&2
         (
           cd "$CPP_ROOT"
-          local exe_rel="out/bin/$preset_name/debug/kano_git_tui_tests$exe_ext"
-          local cov_rel=".kano/tmp/pgo/gather-reports/coverage/raw/kano_git_tui_tests_opencpp_fallback.cobertura.xml"
-          local junit_rel=".kano/tmp/pgo/gather-reports/junit/kano_git_tui_tests_opencpp_fallback.xml"
+          local cov_rel=".kano/tmp/pgo/gather-reports/coverage/raw/${fallback_label}_opencpp_fallback.cobertura.xml"
+          local junit_rel=".kano/tmp/pgo/gather-reports/junit/${fallback_label}_opencpp_fallback.xml"
           local src_win exe_win cov_win junit_win
           src_win="$(cygpath -w "code")"
-          exe_win="$(cygpath -w "$exe_rel")"
+          exe_win="$(_to_win_path "$fallback_candidate")"
           cov_win="$(cygpath -w "$cov_rel")"
           junit_win="$(cygpath -w "$junit_rel")"
+          local -a fallback_args=(--order lex --rng-seed 1337 --durations yes)
+          if [[ -n "$fallback_filter" ]]; then
+            fallback_args+=("$fallback_filter")
+          fi
+          fallback_args+=(--reporter junit "--out=$junit_win")
 
           MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
             --sources "$src_win" \
@@ -1067,9 +1096,8 @@ run_collect_tests_default() {
             --export_type "cobertura:$cov_win" \
             --quiet \
             -- "$exe_win" \
-              --order lex --rng-seed 1337 --durations yes "[unit],[property]" \
-              --reporter junit "--out=$junit_win"
-        ) >"$logs_dir/kano_git_tui_tests_opencpp_fallback.log" 2>&1 || true
+              "${fallback_args[@]}"
+        ) >"$logs_dir/${fallback_label}_opencpp_fallback.log" 2>&1 || true
       fi
 
       export KANO_CPP_INFRA_COVERAGE_TOOL="$previous_coverage_tool"
@@ -1081,11 +1109,20 @@ run_collect_tests_default() {
     local nonempty_count
     nonempty_count="$(count_nonempty_cobertura_files "$coverage_raw_dir")"
     if [[ "$nonempty_count" == "0" ]]; then
+      local salvage_entry="${suite[0]:-kano_git_tui_tests|[unit],[property]}"
+      local salvage_label salvage_filter salvage_candidate
+      IFS='|' read -r salvage_label salvage_filter <<< "$salvage_entry"
+      salvage_candidate="${collected_binaries[0]:-$bin_root/$salvage_label$exe_ext}"
+      if [[ ! -f "$salvage_candidate" ]]; then
+        salvage_candidate="$bin_root/$salvage_label"
+      fi
       salvage_windows_opencppcoverage_for_tui \
-        "$bin_root/kano_git_tui_tests$exe_ext" \
+        "$salvage_candidate" \
         "$reports_dir" \
         "$coverage_raw_dir" \
-        "$logs_dir" || true
+        "$logs_dir" \
+        "$salvage_label" \
+        "$salvage_filter" || true
     fi
   fi
 
