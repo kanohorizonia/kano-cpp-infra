@@ -14,10 +14,30 @@ export INF_CPP_ROOT="${INF_CPP_ROOT:-$CPP_ROOT}"
 export KANO_CPP_ROOT="${KANO_CPP_ROOT:-$CPP_ROOT}"
 export KANO_CPP_INFRA_CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-$CPP_ROOT}"
 export KANO_CPP_INFRA_REPO_ROOT="${KANO_CPP_INFRA_REPO_ROOT:-$REPO_ROOT}"
+resolve_repo_path() {
+  local raw_path="${1:-}"
+  local normalized
+  if [[ -z "$raw_path" ]]; then
+    return 0
+  fi
+  normalized="${raw_path//\\//}"
+  if command -v cygpath >/dev/null 2>&1 && [[ "$normalized" =~ ^[A-Za-z]:/ ]]; then
+    cygpath -u "$normalized"
+    return 0
+  fi
+  if [[ "$normalized" == /* ]]; then
+    printf '%s\n' "$normalized"
+    return 0
+  fi
+  normalized="${normalized#./}"
+  printf '%s/%s\n' "${REPO_ROOT%/}" "$normalized"
+}
 if [[ -z "${INF_COVERAGE_ROOT:-}" ]]; then
   if [[ -n "${KANO_COVERAGE_REPORT_DIR:-}" ]]; then
+    export KANO_COVERAGE_REPORT_DIR="$(resolve_repo_path "$KANO_COVERAGE_REPORT_DIR")"
     export INF_COVERAGE_ROOT="$KANO_COVERAGE_REPORT_DIR"
   elif [[ -n "${KANO_COVERAGE_REPORTS_ROOT:-}" && -n "${KANO_REPORT_SLUG:-}" ]]; then
+    export KANO_COVERAGE_REPORTS_ROOT="$(resolve_repo_path "$KANO_COVERAGE_REPORTS_ROOT")"
     export INF_COVERAGE_ROOT="$KANO_COVERAGE_REPORTS_ROOT/$KANO_REPORT_SLUG"
   fi
 fi
