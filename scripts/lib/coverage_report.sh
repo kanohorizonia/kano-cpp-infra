@@ -198,6 +198,24 @@ coverage_default_configure_preset() {
 
 coverage_default_test_binary() {
     local platform="${1:-$(detect_host_os)}"
+    local override="${KANO_COVERAGE_TEST_BINARY:-}"
+    if [[ -z "$override" ]]; then
+        case "$platform" in
+            Darwin)
+                override="${KANO_COVERAGE_TEST_BINARY_MACOS:-${KANO_COVERAGE_TEST_BINARY_MAC:-}}"
+                ;;
+            Linux)
+                override="${KANO_COVERAGE_TEST_BINARY_LINUX:-}"
+                ;;
+            MINGW*|CYGWIN*|MSYS*|*nt*)
+                override="${KANO_COVERAGE_TEST_BINARY_WINDOWS:-}"
+                ;;
+        esac
+    fi
+    if [[ -n "$override" ]]; then
+        printf '%s\n' "$override"
+        return 0
+    fi
     case "$platform" in
         Darwin|Linux)
             printf '%s\n' "kano_git_tui_tests"

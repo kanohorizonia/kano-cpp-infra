@@ -18,6 +18,25 @@ REPO_ROOT="$(cd -- "$CPP_ROOT/../.." && pwd)"
 export KANO_CPP_INFRA_CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-${CPP_ROOT}}"
 export KANO_CPP_INFRA_REPO_ROOT="${KANO_CPP_INFRA_REPO_ROOT:-${REPO_ROOT}}"
 
+resolve_repo_path() {
+    local raw_path="${1:-}"
+    local normalized
+    if [[ -z "$raw_path" ]]; then
+        return 0
+    fi
+    normalized="${raw_path//\\//}"
+    if command -v cygpath >/dev/null 2>&1 && [[ "$normalized" =~ ^[A-Za-z]:/ ]]; then
+        cygpath -u "$normalized"
+        return 0
+    fi
+    if [[ "$normalized" == /* ]]; then
+        printf '%s\n' "$normalized"
+        return 0
+    fi
+    normalized="${normalized#./}"
+    printf '%s/%s\n' "${REPO_ROOT%/}" "$normalized"
+}
+
 # ─── Detect preset from build output layout ─────────────────────────────────────
 detect_preset_from_bin_dir() {
     local cpp_root="$1"
@@ -66,15 +85,15 @@ case "$REPORT_LANE" in
         ;;
 esac
 
-export KANO_REPORT_ROOT="${KANO_REPORT_ROOT:-$CPP_ROOT/.kano/tmp/pgo/test-reports}"
+export KANO_REPORT_ROOT="$(resolve_repo_path "${KANO_REPORT_ROOT:-$CPP_ROOT/.kano/tmp/pgo/test-reports}")"
 export KANO_REPORT_SLUG="${KANO_REPORT_SLUG:-test}"
 export KANO_TEST_LANE="$REPORT_LANE"
 export KANO_REPORT_COMMAND="${KANO_REPORT_COMMAND:-pixi run gather-reports}"
 export KANO_TEST_SUITE_MAP_REL="${KANO_TEST_SUITE_MAP_REL:-raw/suite-map.kano-git-master.json}"
-export KANO_TEST_REPORTS_ROOT="${KANO_TEST_REPORTS_ROOT:-$KANO_REPORT_ROOT/test-reports}"
-export KANO_COVERAGE_REPORTS_ROOT="${KANO_COVERAGE_REPORTS_ROOT:-$KANO_REPORT_ROOT/coverage-reports}"
-export KANO_TEST_XML="${KANO_TEST_XML:-$KANO_TEST_REPORTS_ROOT/$KANO_REPORT_SLUG/tests.xml}"
-export KANO_BDD_METADATA_DIR="${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}"
+export KANO_TEST_REPORTS_ROOT="$(resolve_repo_path "${KANO_TEST_REPORTS_ROOT:-$KANO_REPORT_ROOT/test-reports}")"
+export KANO_COVERAGE_REPORTS_ROOT="$(resolve_repo_path "${KANO_COVERAGE_REPORTS_ROOT:-$KANO_REPORT_ROOT/coverage-reports}")"
+export KANO_TEST_XML="$(resolve_repo_path "${KANO_TEST_XML:-$KANO_TEST_REPORTS_ROOT/$KANO_REPORT_SLUG/tests.xml}")"
+export KANO_BDD_METADATA_DIR="$(resolve_repo_path "${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}")"
 export KANO_TEST_COMMAND="${KANO_TEST_COMMAND:-bash \"$CPP_ROOT/code/tests/run_tests.sh\" \"$DETECTED_PRESET\" \"$REPORT_CONFIG\" \"$REPORT_LANE\"}"
 
 mkdir -p "$KANO_REPORT_ROOT/raw" "$KANO_BDD_METADATA_DIR"
