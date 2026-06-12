@@ -78,7 +78,7 @@ kano_cpp_infra_tool_bootstrap_cache_args_with_pgo_mode() {
   if command -v jq >/dev/null 2>&1; then
     if [[ -n "$raw" ]]; then
       printf '%s' "$raw" |
-        jq -c --arg mode "$mode" '. + {"KANO_CPP_INFRA_PGO_MODE": $mode} | if $mode == "use" and has("KOG_BUILD_TESTS") | not then . + {"KOG_BUILD_TESTS": "OFF"} else . end'
+        jq -c --arg mode "$mode" '. + {"KANO_CPP_INFRA_PGO_MODE": $mode} | if $mode == "use" and (has("KOG_BUILD_TESTS") | not) then . + {"KOG_BUILD_TESTS": "OFF"} else . end'
     else
       jq -cn --arg mode "$mode" '{"KANO_CPP_INFRA_PGO_MODE": $mode} | if $mode == "use" then . + {"KOG_BUILD_TESTS": "OFF"} else . end'
     fi
@@ -305,6 +305,13 @@ kano_cpp_infra_tool_bootstrap_fallback() {
 }
 
 kano_cpp_infra_tool() {
+  case "${1:-}" in
+    cache-args-with-pgo-mode)
+      kano_cpp_infra_tool_bootstrap_fallback "$@"
+      return $?
+      ;;
+  esac
+
   local tool
   local resolve_output
   if resolve_output="$(kano_cpp_infra_resolve_native_tool 2>&1)"; then
