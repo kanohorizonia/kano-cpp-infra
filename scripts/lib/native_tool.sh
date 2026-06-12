@@ -73,7 +73,7 @@ kano_cpp_infra_tool_bootstrap_cache_args_to_cmake() {
 
 kano_cpp_infra_tool_bootstrap_cache_args_with_pgo_mode() {
   local mode="${1:?pgo mode is required}"
-  local raw="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local raw="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-${INF_CMAKE_CACHE_ARGS_JSON:-}}"
 
   if command -v jq >/dev/null 2>&1; then
     if [[ -n "$raw" ]]; then

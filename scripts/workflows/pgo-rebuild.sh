@@ -276,7 +276,7 @@ clean_pgo_use_outputs() {
 run_collect_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-$(default_collect_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_COLLECT_BUILD_PRESET:-$(default_collect_build_preset)}"
-  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-${INF_CMAKE_CACHE_ARGS_JSON:-}}"
   local original_compiler_launcher="${KOG_COMPILER_LAUNCHER:-__KANO_UNSET__}"
 
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
@@ -327,7 +327,7 @@ run_collect_build() {
 run_use_build() {
   local configure_preset="${KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET:-$(default_use_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_PGO_USE_BUILD_PRESET:-$(default_use_build_preset)}"
-  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-${INF_CMAKE_CACHE_ARGS_JSON:-}}"
   local original_compiler_launcher="${KOG_COMPILER_LAUNCHER:-__KANO_UNSET__}"
 
   export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
@@ -499,7 +499,7 @@ archive_microsoft_coverage_reports() {
 run_microsoft_coverage_prepass() {
   local configure_preset="${KANO_CPP_INFRA_COVERAGE_CONFIGURE_PRESET:-$(default_coverage_configure_preset)}"
   local build_preset="${KANO_CPP_INFRA_COVERAGE_BUILD_PRESET:-$(default_coverage_build_preset)}"
-  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-}"
+  local original_cache_args="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-${INF_CMAKE_CACHE_ARGS_JSON:-}}"
   local original_gather_mode="${KANO_CPP_INFRA_PGO_GATHER_MODE:-}"
   local original_collect_preset="${KANO_CPP_INFRA_PGO_COLLECT_CONFIGURE_PRESET:-}"
   local original_coverage_tool="${KANO_CPP_INFRA_COVERAGE_TOOL:-}"
