@@ -53,6 +53,7 @@ fi
 
 # ─── Use the same lane-aware runner contract as `pixi run test` ────────────────
 REPORT_LANE="${KANO_TEST_LANE:-default}"
+REPORT_CONFIG="${KANO_TEST_CONFIG:-Release}"
 case "$REPORT_LANE" in
     default|test)
         REPORT_LANE="default"
@@ -74,7 +75,7 @@ export KANO_TEST_REPORTS_ROOT="${KANO_TEST_REPORTS_ROOT:-$KANO_REPORT_ROOT/test-
 export KANO_COVERAGE_REPORTS_ROOT="${KANO_COVERAGE_REPORTS_ROOT:-$KANO_REPORT_ROOT/coverage-reports}"
 export KANO_TEST_XML="${KANO_TEST_XML:-$KANO_TEST_REPORTS_ROOT/$KANO_REPORT_SLUG/tests.xml}"
 export KANO_BDD_METADATA_DIR="${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}"
-export KANO_TEST_COMMAND="${KANO_TEST_COMMAND:-bash \"$CPP_ROOT/code/tests/run_tests.sh\" \"$DETECTED_PRESET\" \"$REPORT_LANE\"}"
+export KANO_TEST_COMMAND="${KANO_TEST_COMMAND:-bash \"$CPP_ROOT/code/tests/run_tests.sh\" \"$DETECTED_PRESET\" \"$REPORT_CONFIG\" \"$REPORT_LANE\"}"
 
 mkdir -p "$KANO_REPORT_ROOT/raw" "$KANO_BDD_METADATA_DIR"
 cp -f "$INFRA_BASE_DIR/config/suite-map.kano-git-master.json" "$KANO_REPORT_ROOT/raw/suite-map.kano-git-master.json"
