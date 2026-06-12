@@ -1083,7 +1083,11 @@ int CommandCacheArgsWithPgoMode(const std::vector<std::string>& Args) {
         std::cerr << "usage: cache-args-with-pgo-mode <mode>\n";
         return 2;
     }
-    Json::Value Root = ParseJsonTextOrObject(GetEnvString("KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON"));
+    std::string Raw = GetEnvString("KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON");
+    if (Raw.empty()) {
+        Raw = GetEnvString("INF_CMAKE_CACHE_ARGS_JSON");
+    }
+    Json::Value Root = ParseJsonTextOrObject(Raw);
     Root["KANO_CPP_INFRA_PGO_MODE"] = Args[0];
     if (Args[0] == "use" && !Root.isMember("KOG_BUILD_TESTS")) {
         Root["KOG_BUILD_TESTS"] = "OFF";
