@@ -123,6 +123,92 @@ std::string NormalizePathText(const std::string& In) {
     return Out;
 }
 
+std::string LowerAscii(std::string Value) {
+    std::transform(Value.begin(), Value.end(), Value.begin(), [](unsigned char Ch) {
+        return static_cast<char>(std::tolower(Ch));
+    });
+    return Value;
+}
+
+bool HasPathSegment(const std::string& Path, const std::string& Segment) {
+    std::size_t Start = 0;
+    while (Start <= Path.size()) {
+        const std::size_t End = Path.find('/', Start);
+        const std::string Part = Path.substr(Start, End == std::string::npos ? std::string::npos : End - Start);
+        if (Part == Segment) {
+            return true;
+        }
+        if (End == std::string::npos) {
+            break;
+        }
+        Start = End + 1;
+    }
+    return false;
+}
+
+bool IsEscapingRelativePath(const std::string& RelPath) {
+    return RelPath == ".." || RelPath.rfind("../", 0) == 0 || RelPath.find("/../") != std::string::npos;
+}
+
+bool IsExcludedCoveragePath(const std::string& RelPath) {
+    const std::string Lower = LowerAscii(NormalizePathText(RelPath));
+    if (Lower.empty() || Lower[0] == '/' || IsEscapingRelativePath(Lower)) {
+        return true;
+    }
+    if (Lower.find(':') != std::string::npos) {
+        return true;
+    }
+
+    for (const std::string& Segment : {
+             std::string("_deps"),
+             std::string(".vcpkg"),
+             std::string("build"),
+             std::string("out"),
+             std::string("thirdparty"),
+             std::string("third_party"),
+             std::string("external"),
+             std::string("extern"),
+             std::string("catch2"),
+             std::string("ftxui"),
+         }) {
+        if (HasPathSegment(Lower, Segment)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TryMakeCoverageRelativePath(const std::string& Filename, const fs::path& RepoRoot, std::string& OutRelPath) {
+    const std::string Normalized = NormalizePathText(Filename);
+    if (Normalized.empty()) {
+        return false;
+    }
+
+    fs::path RelPath;
+    const fs::path InputPath = fs::path(Normalized);
+    if (InputPath.is_absolute()) {
+        std::error_code Ec;
+        const fs::path Absolute = fs::absolute(InputPath, Ec);
+        if (Ec) {
+            return false;
+        }
+        fs::path MaybeRel = fs::relative(Absolute, RepoRoot, Ec);
+        if (Ec) {
+            return false;
+        }
+        RelPath = MaybeRel;
+    } else {
+        RelPath = InputPath;
+    }
+
+    const std::string RelText = NormalizePathText(RelPath.lexically_normal().string());
+    if (IsExcludedCoveragePath(RelText)) {
+        return false;
+    }
+    OutRelPath = RelText;
+    return true;
+}
+
 std::string SlurpAttribute(const std::string& Tag, const std::string& Name) {
     const std::regex Pattern(Name + R"(\s*=\s*(['"])(.*?)\1)", std::regex::icase);
     std::smatch Match;
@@ -1008,18 +1094,14 @@ int CommandLlvmJsonToCobertura(const std::vector<std::string>& Args) {
                     Hits[LineNo] = Count;
                 }
             }
-
-            fs::path RelPath = Filename;
-            std::error_code Ec;
-            const fs::path Absolute = fs::absolute(Filename, Ec);
-            if (!Ec) {
-                fs::path MaybeRel = fs::relative(Absolute, RepoRoot, Ec);
-                const std::string MaybeRelText = NormalizePathText(MaybeRel.string());
-                if (!Ec && !MaybeRel.empty() && MaybeRelText.find("..") != 0) {
-                    RelPath = MaybeRel;
-                }
+            if (Hits.empty()) {
+                continue;
             }
-            const std::string Rel = NormalizePathText(RelPath.string());
+
+            std::string Rel;
+            if (!TryMakeCoverageRelativePath(Filename, RepoRoot, Rel)) {
+                continue;
+            }
             const std::string PackageName = Rel.find('/') == std::string::npos ? "." : Rel.substr(0, Rel.find_last_of('/'));
             Packages[PackageName].push_back(FileHits{Rel, Hits});
         }

@@ -628,6 +628,7 @@ generate_llvm_coverage_html() {
     "$primary_bin"
     -instr-profile="$merged_profdata"
     -format=text
+    -ignore-filename-regex='_deps|catch2|ftxui|thirdparty|third_party|external|extern|build|out|\.vcpkg'
   )
   for b in "${binaries[@]:1}"; do
     [[ -f "$b" ]] && export_args+=(--object="$b")
