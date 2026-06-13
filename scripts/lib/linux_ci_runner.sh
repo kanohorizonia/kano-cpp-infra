@@ -27,6 +27,42 @@ kano_cpp_linux_ci_is_linux_host() {
   [[ "$(kano_cpp_linux_ci_host_os)" == "Linux" ]]
 }
 
+kano_cpp_linux_ci_resolve_llvm_tool() {
+  local tool="$1"
+  local primary_env="$2"
+  local fallback_env="$3"
+  local explicit="${!primary_env:-}"
+  local fallback="${!fallback_env:-}"
+  local candidate
+
+  for candidate in \
+    "$explicit" \
+    "$fallback" \
+    "$tool" \
+    "$tool-21" \
+    "$tool-20" \
+    "$tool-19" \
+    "$tool-18" \
+    "$tool-17" \
+    "$tool-16"; do
+    [[ -n "$candidate" ]] || continue
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+kano_cpp_linux_ci_resolve_llvm_cov() {
+  kano_cpp_linux_ci_resolve_llvm_tool llvm-cov KANO_LLVM_COV LLVM_COV
+}
+
 kano_cpp_linux_ci_release_configure_preset() {
   printf '%s\n' "${KANO_CPP_LINUX_RELEASE_CONFIGURE_PRESET:-linux-ninja-gcc}"
 }
@@ -119,7 +155,11 @@ kano_cpp_linux_ci_forward_env_args() {
     KANO_CPP_INFRA_PGO_USE_CONFIGURE_PRESET \
     KANO_CPP_INFRA_PGO_USE_BUILD_PRESET \
     KANO_CPP_INFRA_PGO_TEST_PRESET \
-    KANO_GIT_BINARY_PATH
+    KANO_GIT_BINARY_PATH \
+    KANO_LLVM_COV \
+    LLVM_COV \
+    KANO_LLVM_PROFDATA \
+    LLVM_PROFDATA
   do
     if [[ -n "${!name+x}" ]]; then
       out_ref+=(-e "$name=${!name}")
@@ -508,11 +548,12 @@ kano_cpp_linux_ci_write_coverage_summary() {
   local bin_root=""
   local primary=""
   local candidate=""
+  local llvm_cov=""
   local -a args=()
 
   profdata="$raw_dir/merged.profdata"
   [[ -f "$profdata" ]] || return 0
-  command -v llvm-cov >/dev/null 2>&1 || return 0
+  llvm_cov="$(kano_cpp_linux_ci_resolve_llvm_cov)" || return 0
 
   bin_root="$KANO_CPP_LINUX_CI_CPP_ROOT/out/bin/$(kano_cpp_linux_ci_coverage_configure_preset)/debug"
   for candidate in \
@@ -541,7 +582,7 @@ kano_cpp_linux_ci_write_coverage_summary() {
   done
 
   mkdir -p "$(dirname "$summary_file")"
-  llvm-cov report "${args[@]}" > "$summary_file" || true
+  "$llvm_cov" report "${args[@]}" > "$summary_file" || true
 }
 
 kano_cpp_linux_ci_run_coverage_gather() {
