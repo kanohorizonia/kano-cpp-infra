@@ -107,6 +107,8 @@ kano_cpp_linux_ci_forward_env_args() {
     KANO_COVERAGE_HTML_DIR \
     KANO_COVERAGE_SUMMARY \
     KANO_BDD_METADATA_DIR \
+    KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON \
+    INF_CMAKE_CACHE_ARGS_JSON \
     KANO_CPP_INFRA_PGO_GATHER_QUICK \
     KANO_CPP_INFRA_PGO_GATHER_QUICK_SUITE \
     KANO_CPP_INFRA_PGO_DEBUG \
@@ -123,6 +125,18 @@ kano_cpp_linux_ci_forward_env_args() {
       out_ref+=(-e "$name=${!name}")
     fi
   done
+}
+
+kano_cpp_linux_ci_collect_cache_override_args() {
+  local -n out_ref="$1"
+  local raw_json="${KANO_CPP_INFRA_CMAKE_CACHE_ARGS_JSON:-${INF_CMAKE_CACHE_ARGS_JSON:-}}"
+  local arg=""
+
+  [[ -n "$raw_json" ]] || return 0
+  while IFS= read -r arg; do
+    [[ -n "$arg" ]] || continue
+    out_ref+=("$arg")
+  done < <(kano_cpp_infra_tool_bootstrap_cache_args_to_cmake "$raw_json")
 }
 
 kano_cpp_linux_ci_hash_text() {
@@ -334,12 +348,14 @@ kano_cpp_linux_ci_resolve_bin_dir() {
 
 kano_cpp_linux_ci_run_release_build() {
   local configure_preset build_preset
+  local -a cache_override_args=()
   configure_preset="$(kano_cpp_linux_ci_release_configure_preset)"
   build_preset="$(kano_cpp_linux_ci_release_build_preset)"
+  kano_cpp_linux_ci_collect_cache_override_args cache_override_args
 
   (
     cd "$KANO_CPP_LINUX_CI_CPP_ROOT"
-    cmake --preset "$configure_preset"
+    cmake --preset "$configure_preset" "${cache_override_args[@]}"
     cmake --build --preset "$build_preset"
   )
 }
@@ -347,13 +363,15 @@ kano_cpp_linux_ci_run_release_build() {
 kano_cpp_linux_ci_run_coverage_build() {
   local configure_preset build_preset
   local -a fetchcontent_source_args=()
+  local -a cache_override_args=()
   configure_preset="$(kano_cpp_linux_ci_coverage_configure_preset)"
   build_preset="$(kano_cpp_linux_ci_coverage_build_preset)"
   kano_cpp_linux_ci_collect_fetchcontent_source_args fetchcontent_source_args
+  kano_cpp_linux_ci_collect_cache_override_args cache_override_args
 
   (
     cd "$KANO_CPP_LINUX_CI_CPP_ROOT"
-    cmake --preset "$configure_preset" "${fetchcontent_source_args[@]}"
+    cmake --preset "$configure_preset" "${fetchcontent_source_args[@]}" "${cache_override_args[@]}"
     cmake --build --preset "$build_preset"
   )
 }
