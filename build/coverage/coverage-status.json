@@ -1,5 +1,0 @@
-{
-  "coverageHealth": "UNAVAILABLE",
-  "reason": "NO_INSTRUMENTED_BINARIES",
-  "detail": "/c/Users/dorgon.chang/.agents/skills/kano/kano-git-master-skill/src/cpp/out/bin/windows-ninja-msvc-coverage/kano_git_tui_tests.exe"
-}
