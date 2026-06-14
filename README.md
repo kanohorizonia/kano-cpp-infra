@@ -10,9 +10,9 @@ credentials in this repository.
 
 ## Repository Status
 
-The code is being prepared for public use. Repository visibility is controlled
-by the maintainers, but documentation and defaults should be written as if they
-can be read publicly.
+This repository is public and distributed under the MIT License. Documentation,
+examples, scripts, and defaults must remain safe for public readers. Do not add
+secrets, machine-local paths, private hostnames, or release-only credentials.
 
 ## Layout
 
@@ -100,10 +100,11 @@ repo has its own Pixi manifest:
 pixi run --manifest-path src/cpp/shared/infra/pixi.toml env-summary
 ```
 
-## CI And Private Dependency Access
+## CI And Dependency Access
 
-Public repositories that still consume this repository while it is private
-should use a GitHub App installation token rather than a personal token.
+Public consumers can read this repository directly through GitHub. If a private
+consumer or internal mirror still needs authenticated access, use a GitHub App
+installation token rather than a personal token.
 
 For Kano-hosted GitHub Actions, the preferred app is `kanohorizonia-jenkins`.
 Configure these Actions settings at the repository or organization level:
@@ -111,9 +112,10 @@ Configure these Actions settings at the repository or organization level:
 - Variable: `KANO_JENKINS_APP_CLIENT_ID`
 - Secret: `KANO_JENKINS_APP_PRIVATE_KEY`
 
-The workflow should scope the generated token to the consumer repository and
-`kano-cpp-infra`, with `contents: read` unless write access is explicitly
-required. Personal access tokens should only be kept as a temporary fallback.
+The workflow should scope any generated token to only the repositories and
+permissions needed for the job, with `contents: read` unless write access is
+explicitly required. Personal access tokens should only be kept as a temporary
+fallback.
 
 ## Compatibility Policy
 
@@ -129,3 +131,19 @@ required. Personal access tokens should only be kept as a temporary fallback.
 Never commit secrets, private keys, tokens, local credential files, or service
 account material. If a workflow needs credentials, document the expected
 variable or secret name and let the CI platform inject it at runtime.
+
+See `SECURITY.md` for vulnerability reporting and public-source safety rules.
+
+## Contributing
+
+See `CONTRIBUTING.md` for development workflow, validation expectations, and
+compatibility notes for consumers.
+
+## Notices
+
+See `NOTICE.md` for third-party notices, including the vendored `toml.hpp`
+license notice.
+
+## License
+
+MIT License. See `LICENSE`.

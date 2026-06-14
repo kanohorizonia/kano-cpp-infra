@@ -3,8 +3,8 @@
 ## Role
 
 `kano-cpp-infra` is the shared native C++ infrastructure repo for Kano command
-line tools and agent skills. Keep it generic, reusable, and suitable for future
-public release.
+line tools and agent skills. Keep it generic, reusable, and suitable for public
+source distribution.
 
 ## Guardrails
 
@@ -62,8 +62,9 @@ configuration and still match the current CMake/Pixi contract.
 
 ## CI Credential Policy
 
-If a public consumer repo needs this private repository during transition, prefer
-the `kanohorizonia-jenkins` GitHub App through Actions variables/secrets:
+Public consumers can read this repository directly. If a private consumer or
+internal mirror still needs authenticated access, prefer the
+`kanohorizonia-jenkins` GitHub App through Actions variables/secrets:
 
 - `KANO_JENKINS_APP_CLIENT_ID`
 - `KANO_JENKINS_APP_PRIVATE_KEY`
@@ -71,3 +72,12 @@ the `kanohorizonia-jenkins` GitHub App through Actions variables/secrets:
 Scope generated installation tokens to only the repositories and permissions
 needed for the job. Do not replace this with a broad personal access token unless
 there is a documented temporary reason.
+
+## Public Repository Metadata
+
+- Keep `LICENSE`, `NOTICE.md`, `CONTRIBUTING.md`, and `SECURITY.md` aligned with
+  README public-facing guidance.
+- Do not remove third-party license notices from vendored files.
+- If GitHub repository settings are changed, verify that the repository remains
+  public, issues are enabled, and the license is detected as MIT after pushing
+  license changes.

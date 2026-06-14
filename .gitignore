@@ -1,3 +1,7 @@
 # Ignore local Kano agent artifacts and temporary files
 .kano/
+/build/
+/.cache/
+/.pixi/
+/.venv/
 /LastCoverageResults.log
