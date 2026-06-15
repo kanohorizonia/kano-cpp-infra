@@ -571,6 +571,17 @@ int CommandGenerateBddMetadata(const std::vector<std::string>& Args) {
         return 1;
     }
     fs::create_directories(OutDir);
+    std::string Project = GetEnvString("KANO_BDD_PROJECT");
+    if (Project.empty()) {
+        Project = GetEnvString("KANO_PACKAGE_ID");
+    }
+    if (Project.empty()) {
+        Project = "kano-git-master-skill";
+    }
+    std::string ActorsRaw = GetEnvString("KANO_BDD_ACTORS");
+    if (ActorsRaw.empty()) {
+        ActorsRaw = "user,kano-git";
+    }
     for (const TestCase& Case : ParseCases(ReadText(XmlPath))) {
         const std::vector<std::string> Tags = ExtractTags(Case.Name);
         const std::string ScenarioId = ExtractPrefixedTag(Tags, "scenario:", "");
@@ -605,13 +616,23 @@ int CommandGenerateBddMetadata(const std::vector<std::string>& Args) {
         Root["steps"].append("When " + ScenarioTitle + " executes");
         Root["steps"].append("Then expected outcome is observed");
         Root["actors"] = Json::Value(Json::arrayValue);
-        Root["actors"].append("user");
-        Root["actors"].append("kano-git");
+        std::stringstream ActorStream(ActorsRaw);
+        std::string Actor;
+        while (std::getline(ActorStream, Actor, ',')) {
+            Actor.erase(Actor.begin(), std::find_if(Actor.begin(), Actor.end(), [](unsigned char Ch) { return !std::isspace(Ch); }));
+            Actor.erase(std::find_if(Actor.rbegin(), Actor.rend(), [](unsigned char Ch) { return !std::isspace(Ch); }).base(), Actor.end());
+            if (!Actor.empty()) {
+                Root["actors"].append(Actor);
+            }
+        }
+        if (Root["actors"].empty()) {
+            Root["actors"].append("user");
+        }
         Root["traces"] = Json::Value(Json::arrayValue);
         Root["relatedArtifacts"] = Json::Value(Json::arrayValue);
         Root["environment"] = Json::Value(Json::objectValue);
         Root["lane"] = "";
-        Root["project"] = "kano-git-master-skill";
+        Root["project"] = Project;
         Root["domain"] = Feature;
         WriteText(OutPath, WriteJsonString(Root) + "\n");
     }

@@ -207,7 +207,7 @@ coverage_default_test_binary() {
             Linux)
                 override="${KANO_COVERAGE_TEST_BINARY_LINUX:-}"
                 ;;
-            MINGW*|CYGWIN*|MSYS*|*nt*)
+            win64|windows|Windows_NT|MINGW*|CYGWIN*|MSYS*|*nt*)
                 override="${KANO_COVERAGE_TEST_BINARY_WINDOWS:-}"
                 ;;
         esac
@@ -220,7 +220,7 @@ coverage_default_test_binary() {
         Darwin|Linux)
             printf '%s\n' "kano_git_tui_tests"
             ;;
-        MINGW*|CYGWIN*|MSYS*|*nt*)
+        win64|windows|Windows_NT|MINGW*|CYGWIN*|MSYS*|*nt*)
             printf '%s\n' "kano_git_tui_tests.exe"
             ;;
     esac
@@ -244,6 +244,12 @@ coverage_binary_candidate_dirs() {
                 "$cpp_root/out/bin/${preset}"
             ;;
         macos-*|windows-*)
+            if [[ "$preset" != *-coverage && -d "$cpp_root/out/bin/${preset}-coverage" ]]; then
+                printf '%s\n' \
+                    "$cpp_root/out/bin/${preset}-coverage/debug" \
+                    "$cpp_root/out/bin/${preset}-coverage/release" \
+                    "$cpp_root/out/bin/${preset}-coverage"
+            fi
             printf '%s\n' \
                 "$cpp_root/out/bin/${preset}/debug" \
                 "$cpp_root/out/bin/${preset}/release" \

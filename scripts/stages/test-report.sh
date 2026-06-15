@@ -89,7 +89,6 @@ export KANO_REPORT_ROOT="$(resolve_repo_path "${KANO_REPORT_ROOT:-$CPP_ROOT/.kan
 export KANO_REPORT_SLUG="${KANO_REPORT_SLUG:-test}"
 export KANO_TEST_LANE="$REPORT_LANE"
 export KANO_REPORT_COMMAND="${KANO_REPORT_COMMAND:-pixi run gather-reports}"
-export KANO_TEST_SUITE_MAP_REL="${KANO_TEST_SUITE_MAP_REL:-raw/suite-map.kano-git-master.json}"
 export KANO_TEST_REPORTS_ROOT="$(resolve_repo_path "${KANO_TEST_REPORTS_ROOT:-$KANO_REPORT_ROOT/test-reports}")"
 export KANO_COVERAGE_REPORTS_ROOT="$(resolve_repo_path "${KANO_COVERAGE_REPORTS_ROOT:-$KANO_REPORT_ROOT/coverage-reports}")"
 export KANO_TEST_XML="$(resolve_repo_path "${KANO_TEST_XML:-$KANO_TEST_REPORTS_ROOT/$KANO_REPORT_SLUG/tests.xml}")"
@@ -97,6 +96,18 @@ export KANO_BDD_METADATA_DIR="$(resolve_repo_path "${KANO_BDD_METADATA_DIR:-$KAN
 export KANO_TEST_COMMAND="${KANO_TEST_COMMAND:-bash \"$CPP_ROOT/code/tests/run_tests.sh\" \"$DETECTED_PRESET\" \"$REPORT_CONFIG\" \"$REPORT_LANE\"}"
 
 mkdir -p "$KANO_REPORT_ROOT/raw" "$KANO_BDD_METADATA_DIR"
-cp -f "$INFRA_BASE_DIR/config/suite-map.kano-git-master.json" "$KANO_REPORT_ROOT/raw/suite-map.kano-git-master.json"
+suite_map_src="${KANO_TEST_SUITE_MAP_SRC:-}"
+if [[ -z "$suite_map_src" && -n "${KANO_TEST_SUITE_MAP:-}" ]]; then
+    suite_map_src="$KANO_TEST_SUITE_MAP"
+fi
+if [[ -z "$suite_map_src" ]]; then
+    suite_map_src="$INFRA_BASE_DIR/config/suite-map.kano-git-master.json"
+fi
+if [[ -f "$suite_map_src" ]]; then
+    suite_map_name="$(basename "$suite_map_src")"
+    cp -f "$suite_map_src" "$KANO_REPORT_ROOT/raw/$suite_map_name"
+    export KANO_TEST_SUITE_MAP="$KANO_REPORT_ROOT/raw/$suite_map_name"
+    export KANO_TEST_SUITE_MAP_REL="${KANO_TEST_SUITE_MAP_REL:-raw/$suite_map_name}"
+fi
 
 exec bash "$report_script" "$@"
