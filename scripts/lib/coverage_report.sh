@@ -384,6 +384,14 @@ coverage_resolve_opencppcoverage() {
         printf '%s\n' "/c/Program Files/OpenCppCoverage/OpenCppCoverage"
         return 0
     fi
+    if [[ -x "/c/Program Files (x86)/OpenCppCoverage/OpenCppCoverage.exe" ]]; then
+        printf '%s\n' "/c/Program Files (x86)/OpenCppCoverage/OpenCppCoverage.exe"
+        return 0
+    fi
+    if [[ -x "/c/Program Files (x86)/OpenCppCoverage/OpenCppCoverage" ]]; then
+        printf '%s\n' "/c/Program Files (x86)/OpenCppCoverage/OpenCppCoverage"
+        return 0
+    fi
     return 1
 }
 

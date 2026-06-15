@@ -66,7 +66,10 @@ fi
 
 coverage_script="$(kano_cpp_infra_matrix_default_coverage_report_script "$backend")"
 if [[ "$#" -eq 0 ]]; then
-  exec bash "$coverage_script" "${default_command[@]}"
+  if [[ "${#default_command[@]}" -gt 0 ]]; then
+    exec bash "$coverage_script" "${default_command[@]}"
+  fi
+  exec bash "$coverage_script"
 fi
 
 exec bash "$coverage_script" "$@"

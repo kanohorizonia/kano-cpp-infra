@@ -54,7 +54,11 @@ case "$(kano_cpp_infra_matrix_host_os)" in
 esac
 
 if [[ "$#" -eq 0 ]]; then
-  bash "$coverage_script" test "${default_args[@]}"
+  if [[ "${#default_args[@]}" -gt 0 ]]; then
+    bash "$coverage_script" test "${default_args[@]}"
+  else
+    bash "$coverage_script" test
+  fi
   exec bash "$coverage_script" merge
 fi
 
