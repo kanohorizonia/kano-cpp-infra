@@ -12,6 +12,11 @@ LANE="${1:-default}"
 PRESET="${2:-windows-ninja-msvc-release}"
 CONFIG="${KANO_TEST_CONFIG:-Release}"
 RUNNER_PRESET="$PRESET"
+shift $(( $# > 0 ? 1 : 0 )) || true
+shift $(( $# > 0 ? 1 : 0 )) || true
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
 
 case "$RUNNER_PRESET" in
   *-debug)
@@ -73,7 +78,7 @@ rm -rf -- "$KANO_BDD_METADATA_DIR"
 mkdir -p "$KANO_BDD_METADATA_DIR"
 cp -f "$INFRA_BASE_DIR/config/suite-map.kano-git-master.json" "$REPORT_ROOT/raw/suite-map.kano-git-master.json"
 
-bash "$CPP_ROOT/code/tests/run_tests.sh" "$RUNNER_PRESET" "$CONFIG" "$LANE"
+bash "$CPP_ROOT/code/tests/run_tests.sh" "$RUNNER_PRESET" "$CONFIG" "$LANE" "$@"
 if [[ -f "$KANO_TEST_XML" ]]; then
   kano_cpp_infra_tool generate-bdd-metadata \
     "$KANO_TEST_XML" \
