@@ -354,6 +354,27 @@ EOF
     echo "[coverage_report] Status artifact: $INF_COVERAGE_ROOT/coverage-status.json"
 }
 
+coverage_write_status_if_missing() {
+    local status="$1"
+    local reason="$2"
+    local detail="${3:-}"
+
+    if [[ -f "$INF_COVERAGE_ROOT/coverage-status.json" ]]; then
+        echo "[coverage_report] Keeping existing coverage status: $INF_COVERAGE_ROOT/coverage-status.json"
+        return 0
+    fi
+    coverage_write_status "$status" "$reason" "$detail"
+}
+
+coverage_tail_log_to_stderr() {
+    local log_file="${1:-}"
+    local line_count="${2:-80}"
+
+    [[ -n "$log_file" && -f "$log_file" ]] || return 0
+    echo "[coverage_report] Last $line_count lines from $log_file:" >&2
+    tail -n "$line_count" "$log_file" >&2 || true
+}
+
 coverage_resolve_python_bin() {
     kano_resolve_python_bin
 }
@@ -393,6 +414,58 @@ coverage_resolve_opencppcoverage() {
         return 0
     fi
     return 1
+}
+
+coverage_resolve_microsoft_codecoverage() {
+    local home_root="${HOME:-}"
+    local userprofile_posix=""
+
+    for vs_edition in Enterprise Professional Community BuildTools; do
+        local exe_path="/c/Program Files/Microsoft Visual Studio/2022/${vs_edition}/Team Tools/Dynamic Code Coverage Tools/CodeCoverage.exe"
+        if [[ -x "$exe_path" ]]; then
+            printf '%s\n' "$exe_path"
+            return 0
+        fi
+    done
+
+    if command -v codecoverage >/dev/null 2>&1; then
+        command -v codecoverage
+        return 0
+    fi
+    if command -v CodeCoverage >/dev/null 2>&1; then
+        command -v CodeCoverage
+        return 0
+    fi
+    if command -v CodeCoverage.exe >/dev/null 2>&1; then
+        command -v CodeCoverage.exe
+        return 0
+    fi
+    if [[ -x "$home_root/.dotnet/tools/codecoverage" ]]; then
+        printf '%s\n' "$home_root/.dotnet/tools/codecoverage"
+        return 0
+    fi
+    if [[ -x "$home_root/.dotnet/tools/codecoverage.exe" ]]; then
+        printf '%s\n' "$home_root/.dotnet/tools/codecoverage.exe"
+        return 0
+    fi
+    if [[ -n "${USERPROFILE:-}" ]]; then
+        userprofile_posix="${USERPROFILE//\\//}"
+        if [[ -x "$userprofile_posix/.dotnet/tools/codecoverage.exe" ]]; then
+            printf '%s\n' "$userprofile_posix/.dotnet/tools/codecoverage.exe"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+coverage_cobertura_is_valid() {
+    local cobertura_xml="$1"
+    local lines_valid
+
+    [[ -f "$cobertura_xml" ]] || return 1
+    lines_valid="$(coverage_cobertura_lines_valid "$cobertura_xml")"
+    [[ "${lines_valid:-0}" -gt 0 ]]
 }
 
 coverage_is_windows_preset() {
@@ -607,10 +680,13 @@ coverage_run_windows_opencppcoverage() {
     binary_win="$(coverage_to_windows_path "$binary_path")"
     cobertura_win="$(coverage_to_windows_path "$cobertura_xml")"
 
-    echo "[coverage_run_tests] Windows OpenCppCoverage binary: $binary_path"
+    echo "[coverage_run_tests] Windows OpenCppCoverage tool: $occ_bin"
+    echo "[coverage_run_tests] Windows coverage test binary: $binary_path"
     echo "[coverage_run_tests] Windows OpenCppCoverage source root: $source_root"
     echo "[coverage_run_tests] Windows OpenCppCoverage XML: $cobertura_xml"
 
+    local occ_exit
+    set +e
     MSYS2_ARG_CONV_EXCL='*' "$occ_bin" \
         --sources "$source_win" \
         --cover_children \
@@ -619,6 +695,15 @@ coverage_run_windows_opencppcoverage() {
         -- "$binary_win" \
             --order lex --rng-seed 1337 --durations yes \
         >"$log_file" 2>&1
+    occ_exit=$?
+    set -e
+
+    if [[ "$occ_exit" -ne 0 ]]; then
+        echo "[coverage_run_tests] WARNING: OpenCppCoverage failed with exit code $occ_exit. See $log_file" >&2
+        coverage_tail_log_to_stderr "$log_file" 120
+        coverage_write_status "TOOL_FAILED" "OPENCPPCOVERAGE_EXIT_$occ_exit" "$log_file"
+        return 0
+    fi
 
     coverage_normalize_cobertura_for_jenkins "$cobertura_xml" "$cobertura_xml"
     lines_valid="$(coverage_cobertura_lines_valid "$cobertura_xml")"
@@ -632,6 +717,150 @@ coverage_run_windows_opencppcoverage() {
     echo "[coverage_run_tests] OpenCppCoverage Cobertura ready: $cobertura_xml (lines-valid=$lines_valid)"
 }
 
+coverage_run_windows_microsoft_codecoverage() {
+    local preset="$1"
+    local test_binary="$2"
+    local cpp_root binary_path codecov_bin source_root cobertura_xml
+    local binary_win cobertura_win log_file settings_file settings_win lines_valid
+
+    cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
+    binary_path="$(coverage_resolve_binary_path "$preset" "$test_binary" || true)"
+    if [[ ! -f "$binary_path" ]]; then
+        echo "[coverage_run_tests] ERROR: Binary not found: $binary_path" >&2
+        return 1
+    fi
+    codecov_bin="$(coverage_resolve_microsoft_codecoverage)" || {
+        echo "[coverage_run_tests] ERROR: Microsoft.CodeCoverage.Console not found." >&2
+        return 1
+    }
+
+    source_root="${KANO_COVERAGE_SOURCE_ROOT:-$cpp_root/code}"
+    cobertura_xml="$INF_COVERAGE_ROOT/cobertura.xml"
+    log_file="$INF_COVERAGE_ROOT/microsoft-codecoverage.log"
+    settings_file="$INF_COVERAGE_ROOT/microsoft-codecoverage.settings.xml"
+
+    mkdir -p "$INF_COVERAGE_ROOT"
+    rm -f "$cobertura_xml" "$log_file" "$settings_file"
+
+    binary_win="$(coverage_to_windows_path "$binary_path")"
+    cobertura_win="$(coverage_to_windows_path "$cobertura_xml")"
+    settings_win="$(coverage_to_windows_path "$settings_file")"
+
+    cat > "$settings_file" <<EOF
+<Configuration>
+  <CodeCoverage>
+    <ModulePaths>
+      <IncludeDirectories>
+        <Directory>$(coverage_to_windows_path "$(dirname "$binary_path")")</Directory>
+      </IncludeDirectories>
+    </ModulePaths>
+    <SourcePaths>
+      <Path>$(coverage_to_windows_path "$source_root")</Path>
+    </SourcePaths>
+  </CodeCoverage>
+</Configuration>
+EOF
+
+    echo "[coverage_run_tests] Windows Microsoft.CodeCoverage tool: $codecov_bin"
+    echo "[coverage_run_tests] Windows coverage test binary: $binary_path"
+    echo "[coverage_run_tests] Windows Microsoft.CodeCoverage source root: $source_root"
+    echo "[coverage_run_tests] Windows Microsoft.CodeCoverage XML: $cobertura_xml"
+
+    local supports_instrument=0
+    if "$codecov_bin" --help 2>/dev/null | grep -qi "instrument"; then
+        supports_instrument=1
+    fi
+
+    local ms_exit
+    set +e
+    {
+        if [[ "$supports_instrument" == "1" ]]; then
+            echo "[coverage_run_tests] Instrumenting with Microsoft.CodeCoverage: $binary_win"
+            MSYS2_ARG_CONV_EXCL='*' "$codecov_bin" instrument "$binary_win"
+        else
+            echo "[coverage_run_tests] Microsoft.CodeCoverage instrument command not available; using collect-only mode"
+        fi
+
+        local ps_script="& '${binary_win//\'/\'\'}' '--order' 'lex' '--rng-seed' '1337' '--durations' 'yes'"
+        local wrapped_command="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$ps_script\""
+        MSYS2_ARG_CONV_EXCL='*' "$codecov_bin" collect \
+            --settings "$settings_win" \
+            --output-format cobertura \
+            --output "$cobertura_win" \
+            "$wrapped_command"
+    } >"$log_file" 2>&1
+    ms_exit=$?
+    set -e
+
+    if [[ "$ms_exit" -ne 0 ]]; then
+        echo "[coverage_run_tests] WARNING: Microsoft.CodeCoverage failed with exit code $ms_exit. See $log_file" >&2
+        coverage_tail_log_to_stderr "$log_file" 120
+        coverage_write_status "TOOL_FAILED" "MICROSOFT_CODE_COVERAGE_EXIT_$ms_exit" "$log_file"
+        return 0
+    fi
+
+    coverage_normalize_cobertura_for_jenkins "$cobertura_xml" "$cobertura_xml"
+    lines_valid="$(coverage_cobertura_lines_valid "$cobertura_xml")"
+    if [[ "$lines_valid" -le 0 ]]; then
+        echo "[coverage_run_tests] WARNING: Microsoft.CodeCoverage produced empty Cobertura XML. See $log_file" >&2
+        coverage_write_status "UNAVAILABLE" "EMPTY_MICROSOFT_COBERTURA" "$cobertura_xml"
+        return 0
+    fi
+
+    coverage_write_status "VALID" "MICROSOFT_COBERTURA_READY" "$cobertura_xml"
+    echo "[coverage_run_tests] Microsoft.CodeCoverage Cobertura ready: $cobertura_xml (lines-valid=$lines_valid)"
+}
+
+coverage_run_windows_coverage() {
+    local preset="$1"
+    local test_binary="$2"
+    local provider="${KANO_CPP_INFRA_WINDOWS_COVERAGE_PROVIDER:-${KANO_CPP_INFRA_COVERAGE_TOOL:-}}"
+    local cobertura_xml="$INF_COVERAGE_ROOT/cobertura.xml"
+    local prefer_microsoft=0
+
+    if [[ "$provider" == "microsoft" || "$provider" == "microsoft-codecoverage" ]]; then
+        coverage_run_windows_microsoft_codecoverage "$preset" "$test_binary"
+        return
+    fi
+    if [[ "$provider" == "opencppcoverage" ]]; then
+        coverage_run_windows_opencppcoverage "$preset" "$test_binary"
+        return
+    fi
+
+    if [[ "${KANO_PLATFORM:-}" == "windows-arm64" || "$preset" == *arm64* ]]; then
+        prefer_microsoft=1
+    fi
+
+    if [[ "$prefer_microsoft" -eq 1 ]]; then
+        if coverage_resolve_microsoft_codecoverage >/dev/null 2>&1; then
+            coverage_run_windows_microsoft_codecoverage "$preset" "$test_binary"
+            if coverage_cobertura_is_valid "$cobertura_xml"; then
+                return
+            fi
+        else
+            echo "[coverage_run_tests] Microsoft.CodeCoverage not available for Windows ARM64; trying OpenCppCoverage fallback." >&2
+        fi
+        if coverage_resolve_opencppcoverage >/dev/null 2>&1; then
+            coverage_run_windows_opencppcoverage "$preset" "$test_binary"
+            return
+        fi
+        coverage_write_status_if_missing "UNAVAILABLE" "WINDOWS_COVERAGE_PROVIDER_NOT_FOUND" "$preset"
+        return 1
+    fi
+
+    if coverage_resolve_opencppcoverage >/dev/null 2>&1; then
+        coverage_run_windows_opencppcoverage "$preset" "$test_binary"
+        return
+    fi
+    if coverage_resolve_microsoft_codecoverage >/dev/null 2>&1; then
+        coverage_run_windows_microsoft_codecoverage "$preset" "$test_binary"
+        return
+    fi
+
+    echo "[coverage_run_tests] ERROR: no Windows coverage provider found." >&2
+    return 1
+}
+
 coverage_render_cobertura_html() {
     local cobertura_xml="$1"
     local cpp_root="${INF_CPP_ROOT:-$(pwd)/src/cpp}"
@@ -640,7 +869,7 @@ coverage_render_cobertura_html() {
     if [[ ! -f "$cobertura_xml" ]]; then
         echo "[coverage_report] WARNING: Cobertura XML not found: $cobertura_xml" >&2
         rm -rf "$INF_COVERAGE_HTML_DIR"
-        coverage_write_status "UNAVAILABLE" "MISSING_COBERTURA" "$cobertura_xml"
+        coverage_write_status_if_missing "UNAVAILABLE" "MISSING_COBERTURA" "$cobertura_xml"
         return 0
     fi
 
@@ -891,7 +1120,7 @@ coverage_run_tests() {
     fi
 
     if coverage_is_windows_msvc_preset "$preset"; then
-        coverage_run_windows_opencppcoverage "$preset" "$test_binary"
+        coverage_run_windows_coverage "$preset" "$test_binary"
         return
     fi
 

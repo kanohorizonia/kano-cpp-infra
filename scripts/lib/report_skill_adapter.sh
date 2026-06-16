@@ -156,6 +156,8 @@ report_skill_prepare_coverage_input() {
   report_skill_copy_file_if_present "$source_dir/coverage-status.json" "$target_dir/coverage-status.json"
   report_skill_copy_file_if_present "$source_dir/coverage-status.md" "$target_dir/coverage-status.md"
   report_skill_copy_file_if_present "$source_dir/opencppcoverage.log" "$target_dir/opencppcoverage.log"
+  report_skill_copy_file_if_present "$source_dir/microsoft-codecoverage.log" "$target_dir/microsoft-codecoverage.log"
+  report_skill_copy_file_if_present "$source_dir/microsoft-codecoverage.settings.xml" "$target_dir/microsoft-codecoverage.settings.xml"
 
   if [[ -d "$source_dir/html" ]]; then
     report_skill_copy_tree_if_present "$source_dir/html" "$target_dir/html"
