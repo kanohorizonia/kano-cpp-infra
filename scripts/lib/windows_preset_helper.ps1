@@ -247,7 +247,7 @@ function Get-PixiEnvironmentRoot([string]$ProjectRoot) {
     $root = $parentRoot
   }
 
-  throw "pixi environment root not found from $ProjectRoot. Run './kog self install-prereq'."
+  throw "pixi environment root not found from $ProjectRoot. Run './scripts/kog self install-prereq' from the repository root."
 }
 
 function Test-ValidExecutable([string]$Path) {
@@ -346,9 +346,9 @@ function Get-PixiBuildToolPrefix([string]$ProjectRoot) {
 
   if ($resolved.Count -eq 0) {
     if ($pixiEnvRoot) {
-      throw "pixi build tool environment not found under $pixiEnvRoot. Run './kog self install-prereq'."
+      throw "pixi build tool environment not found under $pixiEnvRoot. Run './scripts/kog self install-prereq' from the repository root."
     } else {
-      throw "pixi build tool environment not found. Run './kog self install-prereq' to install."
+      throw "pixi build tool environment not found. Run './scripts/kog self install-prereq' from the repository root to install."
     }
   }
 
@@ -378,9 +378,9 @@ function Get-PixiNinjaPath([string]$ProjectRoot) {
   }
 
   if ($pixiEnvRoot) {
-    throw "pixi ninja.exe not found at $ninjaPath and not in PATH. Run './kog self install-prereq'."
+    throw "pixi ninja.exe not found at $ninjaPath and not in PATH. Run './scripts/kog self install-prereq' from the repository root."
   } else {
-    throw "ninja.exe not found in PATH and no pixi environment found. Run './kog self install-prereq' to install pixi environment."
+    throw "ninja.exe not found in PATH and no pixi environment found. Run './scripts/kog self install-prereq' from the repository root to install pixi environment."
   }
 }
 
