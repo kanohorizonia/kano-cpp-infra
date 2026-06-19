@@ -52,6 +52,8 @@ run_test_report() {
     }
   fi
   export KANO_BDD_METADATA_DIR="$(kct_report_resolve_path "${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}")"
+  export KANO_CTEST_OUTPUT_SIZE_PASSED="${KANO_CTEST_OUTPUT_SIZE_PASSED:-262144}"
+  export KANO_CTEST_OUTPUT_SIZE_FAILED="${KANO_CTEST_OUTPUT_SIZE_FAILED:-1048576}"
 
   rm -f "$KANO_TEST_XML"
   mkdir -p "$KANO_TEST_REPORT_DIR"

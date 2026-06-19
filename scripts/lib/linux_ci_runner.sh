@@ -423,6 +423,8 @@ kano_cpp_linux_ci_run_test_lane() {
 
   (
     cd "$KANO_CPP_LINUX_CI_CPP_ROOT"
+    export KANO_CTEST_OUTPUT_SIZE_PASSED="${KANO_CTEST_OUTPUT_SIZE_PASSED:-262144}"
+    export KANO_CTEST_OUTPUT_SIZE_FAILED="${KANO_CTEST_OUTPUT_SIZE_FAILED:-1048576}"
     if [[ -n "$xml_output" ]]; then
       KANO_SKIP_TEST_BUILD=1 KANO_TEST_XML="$xml_output" \
         bash "$KANO_CPP_LINUX_CI_CPP_ROOT/code/tests/run_tests.sh" "$preset_name" "$lane_name"
