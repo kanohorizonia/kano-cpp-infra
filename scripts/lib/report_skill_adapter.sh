@@ -237,8 +237,15 @@ report_skill_package() {
     local suite_map_name
     suite_map_name="$(basename "$suite_map_src")"
     mkdir -p "$KANO_REPORT_ROOT/raw"
-    cp -f "$suite_map_src" "$KANO_REPORT_ROOT/raw/$suite_map_name"
-    export KANO_TEST_SUITE_MAP="$KANO_REPORT_ROOT/raw/$suite_map_name"
+    local suite_map_dest="$KANO_REPORT_ROOT/raw/$suite_map_name"
+    local suite_map_src_abs
+    local suite_map_dest_abs
+    suite_map_src_abs="$(cd -- "$(dirname -- "$suite_map_src")" && pwd -P)/$suite_map_name"
+    suite_map_dest_abs="$(cd -- "$(dirname -- "$suite_map_dest")" && pwd -P)/$suite_map_name"
+    if [[ "$suite_map_src_abs" != "$suite_map_dest_abs" ]]; then
+      cp -f "$suite_map_src" "$suite_map_dest"
+    fi
+    export KANO_TEST_SUITE_MAP="$suite_map_dest"
     export KANO_TEST_SUITE_MAP_REL="${KANO_TEST_SUITE_MAP_REL:-raw/$suite_map_name}"
   fi
 

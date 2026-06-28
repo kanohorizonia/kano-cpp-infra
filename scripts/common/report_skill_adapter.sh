@@ -69,7 +69,14 @@ report_skill_package() {
   local suite_map_src="$KANO_CPP_INFRA_CPP_ROOT/shared/infra/config/suite-map.kano-git-master.json"
   if [[ -f "$suite_map_src" && -n "${KANO_REPORT_ROOT:-}" ]]; then
     mkdir -p "$KANO_REPORT_ROOT/raw"
-    cp -f "$suite_map_src" "$KANO_REPORT_ROOT/raw/suite-map.kano-git-master.json"
+    local suite_map_dest="$KANO_REPORT_ROOT/raw/suite-map.kano-git-master.json"
+    local suite_map_src_abs
+    local suite_map_dest_abs
+    suite_map_src_abs="$(cd -- "$(dirname -- "$suite_map_src")" && pwd -P)/$(basename -- "$suite_map_src")"
+    suite_map_dest_abs="$(cd -- "$(dirname -- "$suite_map_dest")" && pwd -P)/$(basename -- "$suite_map_dest")"
+    if [[ "$suite_map_src_abs" != "$suite_map_dest_abs" ]]; then
+      cp -f "$suite_map_src" "$suite_map_dest"
+    fi
     export KANO_TEST_SUITE_MAP_REL="raw/suite-map.kano-git-master.json"
   fi
 

@@ -52,6 +52,7 @@ run_test_report() {
     }
   fi
   export KANO_BDD_METADATA_DIR="$(kct_report_resolve_path "${KANO_BDD_METADATA_DIR:-$KANO_REPORT_ROOT/raw/bdd-metadata}")"
+  export KANO_BDD_FEATURE_MANIFEST="$(kct_report_resolve_path "${KANO_BDD_FEATURE_MANIFEST:-$KANO_CPP_INFRA_REPO_ROOT/src/cpp/shared/infra/config/bdd-feature-manifest.kano-agent-backlog-skill.json}")"
   export KANO_CTEST_OUTPUT_SIZE_PASSED="${KANO_CTEST_OUTPUT_SIZE_PASSED:-262144}"
   export KANO_CTEST_OUTPUT_SIZE_FAILED="${KANO_CTEST_OUTPUT_SIZE_FAILED:-1048576}"
 
@@ -80,7 +81,11 @@ else
 EOF
 fi
 
-  kano_cpp_infra_tool render-junit-report "$KANO_TEST_XML" "$KANO_TEST_REPORT_DIR" "$report_title"
+  local -a render_args=("$KANO_TEST_XML" "$KANO_TEST_REPORT_DIR" "$report_title" "$KANO_BDD_METADATA_DIR")
+  if [[ -f "$KANO_BDD_FEATURE_MANIFEST" ]]; then
+    render_args+=("$KANO_BDD_FEATURE_MANIFEST")
+  fi
+  kano_cpp_infra_tool render-junit-report "${render_args[@]}"
   bash "$KANO_CPP_INFRA_TEST_REPORT_SCRIPT_DIR/package-reports-with-skill.sh"
 }
 

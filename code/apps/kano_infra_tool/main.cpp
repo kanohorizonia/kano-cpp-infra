@@ -558,6 +558,248 @@ std::vector<fs::path> SortedCoberturaFiles(const fs::path& Dir) {
     return Files;
 }
 
+std::string JoinStrings(const std::vector<std::string>& Values, const std::string& Separator) {
+    std::ostringstream Out;
+    for (size_t Index = 0; Index < Values.size(); ++Index) {
+        if (Index > 0) {
+            Out << Separator;
+        }
+        Out << Values[Index];
+    }
+    return Out.str();
+}
+
+Json::Value JsonArrayFromStrings(const std::vector<std::string>& Values) {
+    Json::Value Out(Json::arrayValue);
+    for (const std::string& Value : Values) {
+        Out.append(Value);
+    }
+    return Out;
+}
+
+std::string SlugifyReportSegment(const std::string& Value) {
+    std::string Out;
+    bool bLastDash = false;
+    for (unsigned char Ch : Value) {
+        if (std::isalnum(Ch)) {
+            Out.push_back(static_cast<char>(std::tolower(Ch)));
+            bLastDash = false;
+        } else if (!Out.empty() && !bLastDash) {
+            Out.push_back('-');
+            bLastDash = true;
+        }
+    }
+    while (!Out.empty() && Out.back() == '-') {
+        Out.pop_back();
+    }
+    return Out.empty() ? "unknown" : Out;
+}
+
+std::string HumanizeId(std::string Value) {
+    if (Value.empty()) {
+        return "Uncategorized";
+    }
+    for (char& Ch : Value) {
+        if (Ch == '-' || Ch == '_') {
+            Ch = ' ';
+        }
+    }
+    bool bWordStart = true;
+    for (char& Ch : Value) {
+        unsigned char UCh = static_cast<unsigned char>(Ch);
+        if (std::isspace(UCh)) {
+            bWordStart = true;
+        } else if (bWordStart) {
+            Ch = static_cast<char>(std::toupper(UCh));
+            bWordStart = false;
+        }
+    }
+    return Value;
+}
+
+std::string FirstStringField(const Json::Value& Node, const std::vector<std::string>& Keys, const std::string& DefaultValue = "") {
+    for (const std::string& Key : Keys) {
+        const std::string Value = GetString(Node, Key, "");
+        if (!Value.empty()) {
+            return Value;
+        }
+    }
+    return DefaultValue;
+}
+
+std::vector<std::string> JsonStringArray(const Json::Value& Node) {
+    std::vector<std::string> Values;
+    if (!Node.isArray()) {
+        return Values;
+    }
+    for (const Json::Value& Item : Node) {
+        if (Item.isString()) {
+            Values.push_back(Item.asString());
+        }
+    }
+    return Values;
+}
+
+std::map<std::string, Json::Value> LoadBddMetadataByScenario(const fs::path& Dir) {
+    std::map<std::string, Json::Value> Out;
+    if (Dir.empty() || !fs::is_directory(Dir)) {
+        return Out;
+    }
+    for (const fs::path& JsonPath : SortedFilesWithExtension(Dir, ".json")) {
+        try {
+            Json::Value Root = ParseJsonFile(JsonPath);
+            const std::string ScenarioId = GetString(Root, "scenarioId", "");
+            if (!ScenarioId.empty()) {
+                Out[ScenarioId] = Root;
+            }
+        } catch (...) {
+            // Corrupt generated metadata should not hide the base JUnit report.
+        }
+    }
+    return Out;
+}
+
+std::map<std::string, Json::Value> LoadFeatureManifestById(const fs::path& ManifestPath) {
+    std::map<std::string, Json::Value> Out;
+    if (ManifestPath.empty() || !fs::is_regular_file(ManifestPath)) {
+        return Out;
+    }
+    const Json::Value Root = ParseJsonFile(ManifestPath);
+    const Json::Value Features = Root["features"];
+    if (!Features.isArray()) {
+        return Out;
+    }
+    for (const Json::Value& Feature : Features) {
+        const std::string Id = GetString(Feature, "id", "");
+        if (!Id.empty()) {
+            Out[Id] = Feature;
+        }
+    }
+    return Out;
+}
+
+std::string StatusForCase(const TestCase& Case) {
+    if (Case.bFailure) {
+        return "Failed";
+    }
+    if (Case.bError) {
+        return "Error";
+    }
+    if (Case.bSkipped) {
+        return "Skipped";
+    }
+    return "Passed";
+}
+
+std::string StatusCssClass(const std::string& Status) {
+    std::string LowerStatus = Lower(Status);
+    if (LowerStatus == "error") {
+        LowerStatus = "failed";
+    }
+    return "status-" + LowerStatus;
+}
+
+std::string ReportCss() {
+    return R"(    :root { color-scheme: light dark; --bg: #f7f8fb; --panel: #ffffff; --text: #172033; --muted: #5e6a82; --accent: #2357c6; --border: #dbe2ef; --pass: #147d4f; --fail: #b3261e; --warn: #8a5a00; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #0b1020; --panel: #121a31; --text: #edf2ff; --muted: #a9b8dc; --accent: #8eb1ff; --border: #2a3557; --pass: #6fda9c; --fail: #ff9a93; --warn: #ffd27a; } }
+    body { margin: 0; font-family: Inter, Segoe UI, Arial, sans-serif; background: var(--bg); color: var(--text); }
+    main { max-width: 1180px; margin: 0 auto; padding: 32px 20px 48px; }
+    h1 { margin: 0 0 10px; font-size: 32px; }
+    h2 { margin: 28px 0 12px; font-size: 20px; }
+    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 20px 0 28px; }
+    .card, .panel, table { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+    .card { padding: 14px 16px; }
+    .panel { padding: 14px 16px; margin: 14px 0; }
+    .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0; }
+    .value { font-size: 24px; font-weight: 700; margin-top: 8px; }
+    table { width: 100%; border-collapse: collapse; overflow: hidden; margin-bottom: 18px; }
+    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0; }
+    tr:last-child td { border-bottom: 0; }
+    code { color: inherit; overflow-wrap: anywhere; }
+    a { color: var(--accent); }
+    .muted, .footer { color: var(--muted); font-size: 13px; }
+    .pill { display: inline-block; border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
+    .status-passed { color: var(--pass); }
+    .status-failed { color: var(--fail); }
+    .status-skipped { color: var(--warn); }
+    .metadata { margin: 0; padding-left: 18px; }
+    .metadata li { margin: 2px 0; }
+)";
+}
+
+struct ScenarioDetailRow {
+    std::string SuiteName;
+    std::string ScenarioId;
+    std::string ScenarioName;
+    std::string Status;
+    std::string CapabilityDescription;
+    std::string MetadataStatus;
+    std::string SourceTestBinary;
+    std::string AutomationStatus;
+    std::string DocVisibility;
+    std::string Time;
+    std::vector<std::string> Tags;
+};
+
+struct FeatureDetailGroup {
+    std::string FeatureId;
+    std::string FeatureName;
+    std::string FeatureSlug;
+    std::string Description;
+    int Passed = 0;
+    int Failed = 0;
+    int Skipped = 0;
+    std::vector<ScenarioDetailRow> Scenarios;
+};
+
+void WriteFeatureDetailPage(const fs::path& OutputDir, const std::string& ReportTitle, const FeatureDetailGroup& Group) {
+    std::ostringstream Rows;
+    if (Group.Scenarios.empty()) {
+        Rows << "<tr><td colspan=\"5\">No scenario rows were available for this feature.</td></tr>\n";
+    } else {
+        for (const ScenarioDetailRow& Row : Group.Scenarios) {
+            const std::string Tags = Row.Tags.empty() ? "none" : JoinStrings(Row.Tags, ", ");
+            Rows << "<tr><td>" << EscapeHtml(Row.SuiteName) << "</td>"
+                 << "<td><strong>" << EscapeHtml(Row.ScenarioName) << "</strong><div class=\"muted\"><code>"
+                 << EscapeHtml(Row.ScenarioId) << "</code></div></td>"
+                 << "<td><span class=\"pill " << EscapeHtml(StatusCssClass(Row.Status)) << "\">"
+                 << EscapeHtml(Row.Status) << "</span></td>"
+                 << "<td>" << EscapeHtml(Row.CapabilityDescription) << "</td>"
+                 << "<td><ul class=\"metadata\">"
+                 << "<li>Metadata: " << EscapeHtml(Row.MetadataStatus) << "</li>"
+                 << "<li>Binary: " << EscapeHtml(Row.SourceTestBinary.empty() ? "unknown" : Row.SourceTestBinary) << "</li>"
+                 << "<li>Automation: " << EscapeHtml(Row.AutomationStatus.empty() ? "unknown" : Row.AutomationStatus) << "</li>"
+                 << "<li>Visibility: " << EscapeHtml(Row.DocVisibility.empty() ? "unknown" : Row.DocVisibility) << "</li>"
+                 << "<li>Duration: " << EscapeHtml(Row.Time.empty() ? "0" : Row.Time) << "s</li>"
+                 << "<li>Tags: " << EscapeHtml(Tags) << "</li>"
+                 << "</ul></td></tr>\n";
+        }
+    }
+
+    std::ostringstream Page;
+    Page << "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n"
+         << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+         << "  <title>" << EscapeHtml(Group.FeatureName) << " - " << EscapeHtml(ReportTitle) << "</title>\n"
+         << "  <style>\n" << ReportCss() << "  </style>\n</head>\n<body>\n  <main>\n"
+         << "    <p class=\"muted\"><a href=\"../../index.html\">Back to summary</a></p>\n"
+         << "    <h1>" << EscapeHtml(Group.FeatureName) << "</h1>\n"
+         << "    <p>" << EscapeHtml(Group.Description) << "</p>\n"
+         << "    <div class=\"summary\">\n"
+         << "      <div class=\"card\"><div class=\"label\">Scenarios</div><div class=\"value\">" << Group.Scenarios.size() << "</div></div>\n"
+         << "      <div class=\"card\"><div class=\"label\">Passed</div><div class=\"value\">" << Group.Passed << "</div></div>\n"
+         << "      <div class=\"card\"><div class=\"label\">Failed</div><div class=\"value\">" << Group.Failed << "</div></div>\n"
+         << "      <div class=\"card\"><div class=\"label\">Skipped</div><div class=\"value\">" << Group.Skipped << "</div></div>\n"
+         << "    </div>\n"
+         << "    <h2>Scenario Details</h2>\n"
+         << "    <table>\n"
+         << "      <thead><tr><th>Suite</th><th>Scenario</th><th>Status</th><th>Capability</th><th>Related Test Metadata</th></tr></thead>\n"
+         << "      <tbody>" << Rows.str() << "      </tbody>\n"
+         << "    </table>\n"
+         << "  </main>\n</body>\n</html>\n";
+    WriteText(OutputDir / "features" / Group.FeatureSlug / "index.html", Page.str());
+}
+
 int CommandGenerateBddMetadata(const std::vector<std::string>& Args) {
     if (Args.size() != 3) {
         std::cerr << "usage: generate-bdd-metadata <tests.xml> <bdd-dir> <test-binary-name>\n";
@@ -640,19 +882,27 @@ int CommandGenerateBddMetadata(const std::vector<std::string>& Args) {
 }
 
 int CommandRenderJunitReport(const std::vector<std::string>& Args) {
-    if (Args.size() != 3) {
-        std::cerr << "usage: render-junit-report <junit-xml> <output-dir> <title>\n";
+    if (Args.size() < 3 || Args.size() > 5) {
+        std::cerr << "usage: render-junit-report <junit-xml> <output-dir> <title> [bdd-metadata-dir] [feature-manifest]\n";
         return 2;
     }
     const fs::path JunitXml = Args[0];
     const fs::path OutputDir = Args[1];
     const std::string Title = Args[2];
+    const fs::path BddMetadataDir = Args.size() >= 4 ? fs::path(Args[3]) : fs::path();
+    const fs::path FeatureManifestPath = Args.size() >= 5 ? fs::path(Args[4]) : fs::path();
     fs::create_directories(OutputDir);
 
     std::vector<TestSuite> Suites;
+    std::vector<TestCase> Cases;
+    std::string XmlText;
     if (fs::is_regular_file(JunitXml)) {
-        Suites = ParseSuites(ReadText(JunitXml));
+        XmlText = ReadText(JunitXml);
+        Suites = ParseSuites(XmlText);
+        Cases = ParseCases(XmlText);
     }
+    const std::map<std::string, Json::Value> BddMetadata = LoadBddMetadataByScenario(BddMetadataDir);
+    const std::map<std::string, Json::Value> FeatureManifest = LoadFeatureManifestById(FeatureManifestPath);
 
     int TotalTests = 0;
     int TotalFailures = 0;
@@ -674,6 +924,84 @@ int CommandRenderJunitReport(const std::vector<std::string>& Args) {
         Status = "Warnings";
     }
 
+    std::map<std::string, FeatureDetailGroup> FeatureGroups;
+    std::vector<TestCase> UncategorizedCases;
+    int NativeMetadataRows = 0;
+    int FallbackMetadataRows = 0;
+    for (const TestCase& Case : Cases) {
+        const std::vector<std::string> Tags = ExtractTags(Case.Name);
+        const std::string ScenarioId = ExtractPrefixedTag(Tags, "scenario:", "");
+        if (ScenarioId.empty()) {
+            UncategorizedCases.push_back(Case);
+            continue;
+        }
+
+        Json::Value Metadata(Json::objectValue);
+        std::string MetadataStatus = "inline tag fallback";
+        auto MetadataIt = BddMetadata.find(ScenarioId);
+        if (MetadataIt != BddMetadata.end()) {
+            Metadata = MetadataIt->second;
+            MetadataStatus = "native BDD metadata";
+            ++NativeMetadataRows;
+        } else {
+            ++FallbackMetadataRows;
+        }
+
+        std::string FeatureId = FirstStringField(Metadata, {"feature", "featureId"}, "");
+        if (FeatureId.empty()) {
+            FeatureId = ExtractPrefixedTag(Tags, "feature:", "uncategorized");
+        }
+        auto ManifestIt = FeatureManifest.find(FeatureId);
+        const Json::Value& ManifestEntry = ManifestIt != FeatureManifest.end() ? ManifestIt->second : Json::Value::nullSingleton();
+        const std::string FeatureName = FirstStringField(ManifestEntry, {"name", "title", "displayName"}, HumanizeId(FeatureId));
+        std::string FeatureDescription = FirstStringField(
+            ManifestEntry,
+            {"description", "capabilityDescription", "summary"},
+            "Scenario-level public review surface for " + FeatureName + ".");
+        std::string CapabilityDescription = FirstStringField(Metadata, {"capabilityDescription", "description", "summary"}, "");
+        if (CapabilityDescription.empty()) {
+            CapabilityDescription = FeatureDescription;
+        }
+
+        FeatureDetailGroup& Group = FeatureGroups[FeatureId];
+        if (Group.FeatureId.empty()) {
+            Group.FeatureId = FeatureId;
+            Group.FeatureName = FeatureName;
+            Group.FeatureSlug = SlugifyReportSegment(FeatureId);
+            Group.Description = FeatureDescription;
+        }
+
+        ScenarioDetailRow Row;
+        Row.SuiteName = Case.SuiteName;
+        Row.ScenarioId = ScenarioId;
+        Row.ScenarioName = FirstStringField(Metadata, {"scenarioTitle", "scenarioName", "title"}, StripTagSuffix(Case.Name));
+        Row.Status = StatusForCase(Case);
+        Row.CapabilityDescription = CapabilityDescription;
+        Row.MetadataStatus = MetadataStatus;
+        Row.SourceTestBinary = FirstStringField(Metadata, {"sourceTestBinary", "testBinary"}, "");
+        Row.AutomationStatus = FirstStringField(Metadata, {"automationStatus"}, "");
+        Row.DocVisibility = FirstStringField(Metadata, {"docVisibility"}, "");
+        Row.Time = Case.Time;
+        Row.Tags = Tags;
+        if (Row.Tags.empty()) {
+            Row.Tags = JsonStringArray(Metadata["tags"]);
+        }
+
+        if (Row.Status == "Passed") {
+            ++Group.Passed;
+        } else if (Row.Status == "Skipped") {
+            ++Group.Skipped;
+        } else {
+            ++Group.Failed;
+        }
+        Group.Scenarios.push_back(Row);
+    }
+
+    int ScenarioTotal = 0;
+    for (const auto& Item : FeatureGroups) {
+        ScenarioTotal += static_cast<int>(Item.second.Scenarios.size());
+    }
+
     Json::Value Summary(Json::objectValue);
     Summary["title"] = Title;
     Summary["summary"] = Status + ": " + std::to_string(PassedTotal) + "/" + std::to_string(TotalTests) + " passed";
@@ -689,6 +1017,8 @@ int CommandRenderJunitReport(const std::vector<std::string>& Args) {
     AddStat("Failures", std::to_string(TotalFailures));
     AddStat("Errors", std::to_string(TotalErrors));
     AddStat("Skipped", std::to_string(TotalSkipped));
+    AddStat("BDD scenarios", std::to_string(ScenarioTotal));
+    AddStat("Uncategorized", std::to_string(UncategorizedCases.size()));
     {
         std::ostringstream S;
         S.setf(std::ios::fixed);
@@ -697,6 +1027,60 @@ int CommandRenderJunitReport(const std::vector<std::string>& Args) {
         AddStat("Duration (s)", S.str());
     }
     WriteText(OutputDir / "summary.json", WriteJsonString(Summary));
+
+    Json::Value FeatureDetails(Json::objectValue);
+    FeatureDetails["schema"] = "kano.test.feature_detail_report.v1";
+    FeatureDetails["title"] = Title;
+    FeatureDetails["sourceXml"] = JunitXml.filename().string();
+    FeatureDetails["bddMetadataStatus"] = BddMetadata.empty() ? "missing_or_empty" : "loaded";
+    FeatureDetails["bddMetadataScenarioCount"] = static_cast<Json::UInt64>(BddMetadata.size());
+    FeatureDetails["featureManifestStatus"] = FeatureManifest.empty() ? "missing_or_empty" : "loaded";
+    FeatureDetails["featureManifest"] = FeatureManifestPath.empty() ? "" : FeatureManifestPath.filename().string();
+    FeatureDetails["scenarioCount"] = ScenarioTotal;
+    FeatureDetails["nativeMetadataRows"] = NativeMetadataRows;
+    FeatureDetails["fallbackMetadataRows"] = FallbackMetadataRows;
+    FeatureDetails["uncategorizedTestCount"] = static_cast<Json::UInt64>(UncategorizedCases.size());
+    FeatureDetails["features"] = Json::Value(Json::arrayValue);
+    for (const auto& Item : FeatureGroups) {
+        const FeatureDetailGroup& Group = Item.second;
+        Json::Value Feature(Json::objectValue);
+        Feature["id"] = Group.FeatureId;
+        Feature["name"] = Group.FeatureName;
+        Feature["description"] = Group.Description;
+        Feature["detailPath"] = "features/" + Group.FeatureSlug + "/index.html";
+        Feature["scenarioCount"] = static_cast<Json::UInt64>(Group.Scenarios.size());
+        Feature["passed"] = Group.Passed;
+        Feature["failed"] = Group.Failed;
+        Feature["skipped"] = Group.Skipped;
+        Feature["scenarios"] = Json::Value(Json::arrayValue);
+        for (const ScenarioDetailRow& Row : Group.Scenarios) {
+            Json::Value Scenario(Json::objectValue);
+            Scenario["suiteName"] = Row.SuiteName;
+            Scenario["scenarioId"] = Row.ScenarioId;
+            Scenario["scenarioName"] = Row.ScenarioName;
+            Scenario["status"] = Row.Status;
+            Scenario["capabilityDescription"] = Row.CapabilityDescription;
+            Scenario["metadataStatus"] = Row.MetadataStatus;
+            Scenario["tags"] = JsonArrayFromStrings(Row.Tags);
+            Json::Value Related(Json::objectValue);
+            Related["sourceTestBinary"] = Row.SourceTestBinary;
+            Related["automationStatus"] = Row.AutomationStatus;
+            Related["docVisibility"] = Row.DocVisibility;
+            Related["durationSeconds"] = Row.Time;
+            Scenario["relatedTestMetadata"] = Related;
+            Feature["scenarios"].append(Scenario);
+        }
+        FeatureDetails["features"].append(Feature);
+    }
+    FeatureDetails["uncategorizedTests"] = Json::Value(Json::arrayValue);
+    for (const TestCase& Case : UncategorizedCases) {
+        Json::Value Row(Json::objectValue);
+        Row["suiteName"] = Case.SuiteName;
+        Row["testName"] = StripTagSuffix(Case.Name);
+        Row["status"] = StatusForCase(Case);
+        FeatureDetails["uncategorizedTests"].append(Row);
+    }
+    WriteText(OutputDir / "feature-details.json", WriteJsonString(FeatureDetails) + "\n");
 
     std::ostringstream Rows;
     Rows.setf(std::ios::fixed);
@@ -712,26 +1096,35 @@ int CommandRenderJunitReport(const std::vector<std::string>& Args) {
         }
     }
 
+    std::ostringstream FeatureRows;
+    if (FeatureGroups.empty()) {
+        FeatureRows << "<tr><td colspan=\"7\">No BDD scenario metadata found. The suite summary remains available and untagged tests are called out as uncategorized.</td></tr>\n";
+    } else {
+        for (const auto& Item : FeatureGroups) {
+            const FeatureDetailGroup& Group = Item.second;
+            FeatureRows << "<tr><td><a href=\"features/" << EscapeHtml(Group.FeatureSlug) << "/index.html\">"
+                        << EscapeHtml(Group.FeatureName) << "</a><div class=\"muted\"><code>"
+                        << EscapeHtml(Group.FeatureId) << "</code></div></td>"
+                        << "<td>" << Group.Scenarios.size() << "</td>"
+                        << "<td>" << Group.Passed << "</td>"
+                        << "<td>" << Group.Failed << "</td>"
+                        << "<td>" << Group.Skipped << "</td>"
+                        << "<td>" << EscapeHtml(Group.Description) << "</td>"
+                        << "<td><a href=\"features/" << EscapeHtml(Group.FeatureSlug) << "/index.html\">Open detail</a></td></tr>\n";
+        }
+    }
+    for (const auto& Item : FeatureGroups) {
+        WriteFeatureDetailPage(OutputDir, Title, Item.second);
+    }
+
+    const std::string BddMetadataStatus = BddMetadata.empty() ? "native BDD metadata missing or empty" : "native BDD metadata loaded";
+    const std::string FeatureManifestStatus = FeatureManifest.empty() ? "curated feature manifest missing or empty" : "curated feature manifest loaded";
+
     std::ostringstream Page;
     Page << "<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n"
          << "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
          << "  <title>" << EscapeHtml(Title) << "</title>\n"
-         << "  <style>\n"
-         << "    :root { color-scheme: dark; --bg: #0b1020; --panel: #121a31; --text: #edf2ff; --muted: #9fb0d8; --accent: #6a8cff; --border: #2a3557; }\n"
-         << "    body { margin: 0; font-family: Inter, Segoe UI, Arial, sans-serif; background: var(--bg); color: var(--text); }\n"
-         << "    main { max-width: 1100px; margin: 0 auto; padding: 32px 20px 48px; }\n"
-         << "    .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 20px 0 28px; }\n"
-         << "    .card, table { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }\n"
-         << "    .card { padding: 14px 16px; }\n"
-         << "    .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }\n"
-         << "    .value { font-size: 24px; font-weight: 700; margin-top: 8px; }\n"
-         << "    table { width: 100%; border-collapse: collapse; overflow: hidden; }\n"
-         << "    th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; }\n"
-         << "    th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }\n"
-         << "    tr:last-child td { border-bottom: 0; }\n"
-         << "    .footer { margin-top: 18px; color: var(--muted); font-size: 13px; }\n"
-         << "    a { color: var(--accent); }\n"
-         << "  </style>\n</head>\n<body>\n  <main>\n"
+         << "  <style>\n" << ReportCss() << "  </style>\n</head>\n<body>\n  <main>\n"
          << "    <h1>" << EscapeHtml(Title) << "</h1>\n"
          << "    <p>" << EscapeHtml(Summary["summary"].asString()) << "</p>\n"
          << "    <div class=\"summary\">\n";
@@ -740,10 +1133,22 @@ int CommandRenderJunitReport(const std::vector<std::string>& Args) {
              << "</div><div class=\"value\">" << EscapeHtml(Stat[1].asString()) << "</div></div>\n";
     }
     Page << "    </div>\n"
+         << "    <section class=\"panel\">\n"
+         << "      <strong>BDD feature detail:</strong> " << EscapeHtml(BddMetadataStatus) << "; "
+         << EscapeHtml(FeatureManifestStatus) << "; inline tag fallback rows: " << FallbackMetadataRows
+         << "; uncategorized tests: " << UncategorizedCases.size() << ".\n"
+         << "    </section>\n"
+         << "    <h2>Feature Scenario Details</h2>\n"
+         << "    <table>\n"
+         << "      <thead><tr><th>Feature</th><th>Scenarios</th><th>Passed</th><th>Failed</th><th>Skipped</th><th>Capability</th><th>Detail</th></tr></thead>\n"
+         << "      <tbody>" << FeatureRows.str() << "      </tbody>\n"
+         << "    </table>\n"
+         << "    <h2>Suite Summary</h2>\n"
          << "    <table>\n"
          << "      <thead><tr><th>Suite</th><th>Tests</th><th>Passed</th><th>Failures</th><th>Errors</th><th>Skipped</th><th>Duration (s)</th></tr></thead>\n"
          << "      <tbody>" << Rows.str() << "</tbody>\n"
          << "    </table>\n"
+         << "    <p class=\"footer\">Feature detail JSON: <a href=\"feature-details.json\">feature-details.json</a></p>\n"
          << "    <p class=\"footer\">Source XML: <code>" << EscapeHtml(JunitXml.filename().string()) << "</code></p>\n"
          << "  </main>\n</body>\n</html>\n";
     WriteText(OutputDir / "index.html", Page.str());

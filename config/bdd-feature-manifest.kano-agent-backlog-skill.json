@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "kind": "kano-bdd-feature-manifest",
+  "product": "kano-agent-backlog-skill",
+  "features": [
+    {
+      "id": "backlog-core",
+      "name": "Backlog Core",
+      "description": "Validates configuration loading, state records, and frontmatter contracts that make backlog items readable and reviewable."
+    },
+    {
+      "id": "workitem-ops",
+      "name": "Workitem Operations",
+      "description": "Validates canonical backlog item creation, update templates, and repo-local workflow operations."
+    },
+    {
+      "id": "integrity-ops",
+      "name": "Integrity Operations",
+      "description": "Validates read-only integrity checks for stale drift, duplicate metadata, and graph hygiene."
+    },
+    {
+      "id": "topic-ops",
+      "name": "Topic Operations",
+      "description": "Validates topic lifecycle audit surfaces and hygiene reporting without mutating backlog content."
+    },
+    {
+      "id": "cli-workflow",
+      "name": "CLI Workflow",
+      "description": "Validates command-line backlog workflows, repository discovery, bounded core commands, and reviewable webview data exposure."
+    }
+  ]
+}
