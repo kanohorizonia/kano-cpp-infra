@@ -228,6 +228,28 @@ static DWORD WINAPI kano_process_reader_thread(LPVOID param) {
     return 0;
 }
 
+static void kano_process_cancel_capture_readers(KanoProcess proc, HANDLE* readers) {
+    if (readers[0]) CancelSynchronousIo(readers[0]);
+    if (readers[1]) CancelSynchronousIo(readers[1]);
+    if (proc->stdout_read) {
+        CloseHandle(proc->stdout_read);
+        proc->stdout_read = NULL;
+    }
+    if (proc->stderr_read) {
+        CloseHandle(proc->stderr_read);
+        proc->stderr_read = NULL;
+    }
+}
+
+static void kano_process_join_reader(HANDLE reader) {
+    if (!reader) return;
+    if (WaitForSingleObject(reader, 5000) == WAIT_TIMEOUT) {
+        TerminateThread(reader, 1);
+        WaitForSingleObject(reader, INFINITE);
+    }
+    CloseHandle(reader);
+}
+
 #else
 
 static long long kano_process_now_ms(void) {
@@ -626,12 +648,11 @@ bool kano_process_wait(KanoProcess proc, int timeout_ms, KanoProcessResult* out_
                 TerminateProcess(proc->process_info.hProcess, 124);
             }
             WaitForSingleObject(proc->process_info.hProcess, 5000);
+            kano_process_cancel_capture_readers(proc, readers);
         }
 
-        WaitForSingleObject(readers[0], INFINITE);
-        WaitForSingleObject(readers[1], INFINITE);
-        CloseHandle(readers[0]);
-        CloseHandle(readers[1]);
+        kano_process_join_reader(readers[0]);
+        kano_process_join_reader(readers[1]);
 
         out_result->stdout_data = stdout_buf;
         out_result->stderr_data = stderr_buf;
