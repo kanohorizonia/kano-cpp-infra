@@ -268,43 +268,40 @@ std::vector<TestSuite> ParseSuites(const std::string& Xml) {
 
 std::vector<TestCase> ParseCases(const std::string& Xml) {
     std::vector<TestCase> Cases;
-    const std::regex SuitePattern(R"(<testsuite\b([^>]*)>([\s\S]*?)</testsuite>)", std::regex::icase);
-    const std::regex CasePattern(R"(<testcase\b([^>]*)(?:/>|>([\s\S]*?)</testcase>))", std::regex::icase);
-    for (std::sregex_iterator SuiteIt(Xml.begin(), Xml.end(), SuitePattern), SuiteEnd; SuiteIt != SuiteEnd; ++SuiteIt) {
-        const std::string SuiteTag = (*SuiteIt)[1].str();
-        const std::string SuiteBody = (*SuiteIt)[2].str();
-        std::string SuiteName = SlurpAttribute(SuiteTag, "name");
-        if (SuiteName.empty()) {
-            SuiteName = "unnamed";
+    std::size_t cursor = 0;
+    while (true) {
+        const std::size_t caseStart = Xml.find("<testcase", cursor);
+        if (caseStart == std::string::npos) {
+            break;
         }
-        for (std::sregex_iterator CaseIt(SuiteBody.begin(), SuiteBody.end(), CasePattern), CaseEnd; CaseIt != CaseEnd; ++CaseIt) {
-            const std::string CaseTag = (*CaseIt)[1].str();
-            const std::string CaseBody = CaseIt->size() > 2 ? (*CaseIt)[2].str() : std::string();
-            TestCase Case;
-            Case.SuiteName = SuiteName;
-            Case.Name = SlurpAttribute(CaseTag, "name");
-            if (Case.Name.empty()) {
-                Case.Name = "unnamed";
-            }
-            Case.Time = SlurpAttribute(CaseTag, "time");
-            if (Case.Time.empty()) {
-                Case.Time = "0";
-            }
-            Case.bFailure = CaseBody.find("<failure") != std::string::npos;
-            Case.bError = CaseBody.find("<error") != std::string::npos;
-            Case.bSkipped = CaseBody.find("<skipped") != std::string::npos;
-            Cases.push_back(Case);
+        const std::size_t tagEnd = Xml.find('>', caseStart);
+        if (tagEnd == std::string::npos) {
+            break;
         }
-    }
-    if (!Cases.empty()) {
-        return Cases;
-    }
-    const std::regex TopCasePattern(R"(<testcase\b([^>]*)(?:/>|>([\s\S]*?)</testcase>))", std::regex::icase);
-    for (std::sregex_iterator It(Xml.begin(), Xml.end(), TopCasePattern), End; It != End; ++It) {
-        const std::string CaseTag = (*It)[1].str();
-        const std::string CaseBody = It->size() > 2 ? (*It)[2].str() : std::string();
+        const std::string CaseTag = Xml.substr(caseStart + 9, tagEnd - (caseStart + 9));
+        const bool selfClosing = tagEnd > caseStart && Xml[tagEnd - 1] == '/';
+        const std::size_t closeStart = selfClosing ? tagEnd : Xml.find("</testcase>", tagEnd + 1);
+        const std::string CaseBody = (!selfClosing && closeStart != std::string::npos)
+            ? Xml.substr(tagEnd + 1, closeStart - (tagEnd + 1))
+            : std::string();
+
+        std::string SuiteName = "unnamed";
+        const std::size_t suiteStart = Xml.rfind("<testsuite", caseStart);
+        const std::size_t suiteClose = Xml.rfind("</testsuite>", caseStart);
+        if (suiteStart != std::string::npos && (suiteClose == std::string::npos || suiteStart > suiteClose)) {
+            const std::size_t suiteTagEnd = Xml.find('>', suiteStart);
+            if (suiteTagEnd != std::string::npos && suiteTagEnd < caseStart) {
+                SuiteName = SlurpAttribute(
+                    Xml.substr(suiteStart + 10, suiteTagEnd - (suiteStart + 10)),
+                    "name");
+                if (SuiteName.empty()) {
+                    SuiteName = "unnamed";
+                }
+            }
+        }
+
         TestCase Case;
-        Case.SuiteName = "unnamed";
+        Case.SuiteName = SuiteName;
         Case.Name = SlurpAttribute(CaseTag, "name");
         if (Case.Name.empty()) {
             Case.Name = "unnamed";
@@ -317,6 +314,9 @@ std::vector<TestCase> ParseCases(const std::string& Xml) {
         Case.bError = CaseBody.find("<error") != std::string::npos;
         Case.bSkipped = CaseBody.find("<skipped") != std::string::npos;
         Cases.push_back(Case);
+        cursor = (!selfClosing && closeStart != std::string::npos)
+            ? closeStart + std::string_view("</testcase>").size()
+            : tagEnd + 1;
     }
     return Cases;
 }

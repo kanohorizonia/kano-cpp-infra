@@ -80,7 +80,23 @@ rm -rf -- "$KANO_BDD_METADATA_DIR"
 mkdir -p "$KANO_BDD_METADATA_DIR"
 cp -f "$INFRA_BASE_DIR/config/suite-map.kano-git-master.json" "$REPORT_ROOT/raw/suite-map.kano-git-master.json"
 
-bash "$CPP_ROOT/code/tests/run_tests.sh" "$RUNNER_PRESET" "$CONFIG" "$LANE" "$@"
+if ! bash "$CPP_ROOT/code/tests/run_tests.sh" "$RUNNER_PRESET" "$CONFIG" "$LANE" "$@"; then
+  test_result_dir="$(dirname "$KANO_TEST_XML")/.tmp-test-result"
+  echo "Test lane failed; bounded JUnit failure details:" >&2
+  failure_found=0
+  for xml_file in "$test_result_dir"/*.xml; do
+    [[ -f "$xml_file" ]] || continue
+    if grep -q '<failure' "$xml_file"; then
+      failure_found=1
+      printf '%s\n' "--- $(basename "$xml_file")" >&2
+      grep -n -A 8 -m 20 '<failure' "$xml_file" >&2 || true
+    fi
+  done
+  if [[ "$failure_found" -eq 0 ]]; then
+    echo "No JUnit failure element was produced; inspect the test process exit and report directory: $test_result_dir" >&2
+  fi
+  exit 1
+fi
 if [[ -f "$KANO_TEST_XML" ]]; then
   kano_cpp_infra_tool generate-bdd-metadata \
     "$KANO_TEST_XML" \
