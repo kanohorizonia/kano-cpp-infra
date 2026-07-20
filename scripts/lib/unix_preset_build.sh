@@ -153,6 +153,12 @@ kano_cpp_run_unix_preset() {
     kano_cpp_collect_build_metadata
     kano_cpp_print_self_build_toolchain
     cmake --preset "$in_configure_preset" "${extra_args[@]}" "${cache_override_args[@]}"
+    if [[ "${#cache_override_args[@]}" -gt 0 ]]; then
+      # CMake can discard non-toolchain cache overrides when a compiler change
+      # triggers its automatic cache reset. Reassert caller-owned overrides on
+      # the now-stable toolchain configuration before building.
+      cmake --preset "$in_configure_preset" "${extra_args[@]}" "${cache_override_args[@]}"
+    fi
     run_cmake_build_with_retry "$in_build_preset"
   )
 }
