@@ -371,7 +371,7 @@ static char* parse_array(const char* raw) {
     free(ctx_inner);
 
     /* build output */
-    size_t out_len = 2; /* '[' and ']' */
+    size_t out_len = 3; /* '[', ']', and trailing NUL */
     for (int i = 0; i < item_count; i++) out_len += strlen(items[i]) + 2; /* ", " */
     char* out = (char*)malloc(out_len);
     if (!out) {
@@ -406,8 +406,9 @@ static char* parse_array(const char* raw) {
 
 static int parse_line(const char* line_in, const char* current_section,
                       TomlMap* m, char* scratch, size_t scratch_size) {
-    if (strlen(line_in) >= scratch_size) return -1;
-    strcpy(scratch, line_in);
+    const size_t line_length = strlen(line_in);
+    if (line_length >= scratch_size) return -1;
+    memmove(scratch, line_in, line_length + 1);
     trim_comment_inplace(scratch);
     if (!*scratch) return -1;
 
