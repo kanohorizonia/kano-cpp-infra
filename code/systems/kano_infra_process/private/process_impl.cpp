@@ -39,6 +39,7 @@ struct KanoProcessImpl {
     HANDLE job;
 #else
     pid_t pid;
+    pid_t process_group;
     int stdout_fd;
     int stderr_fd;
 #endif
@@ -135,6 +136,7 @@ static KanoProcess kano_process_alloc(const KanoProcessOptions* options) {
     proc->stderr_read = NULL;
     proc->job = NULL;
 #else
+    proc->process_group = 0;
     proc->stdout_fd = -1;
     proc->stderr_fd = -1;
 #endif
@@ -276,6 +278,17 @@ static int kano_process_status_to_exit_code(int status) {
     return -1;
 }
 
+static bool kano_process_signal_owned_tree(KanoProcess proc, int signal_number) {
+    if (!proc || !proc->spawned) return false;
+
+    if (proc->process_group > 0 &&
+        kill(-proc->process_group, signal_number) == 0) {
+        return true;
+    }
+
+    return kill(proc->pid, signal_number) == 0;
+}
+
 static bool kano_process_make_nonblocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0) return false;
@@ -348,7 +361,7 @@ static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms, KanoProc
             long long elapsed = kano_process_now_ms() - start_ms;
             long long remaining = (long long)timeout_ms - elapsed;
             if (remaining <= 0 && !process_done) {
-                kill(proc->pid, SIGKILL);
+                kano_process_signal_owned_tree(proc, SIGKILL);
                 out_result->timed_out = true;
                 out_result->exit_code = 124;
                 timeout_ms = 0;
@@ -434,7 +447,7 @@ static bool kano_process_wait_passthrough(KanoProcess proc, int timeout_ms, Kano
             return false;
         }
         if (timeout_ms > 0 && (kano_process_now_ms() - start_ms) >= timeout_ms) {
-            kill(proc->pid, SIGKILL);
+            kano_process_signal_owned_tree(proc, SIGKILL);
             waitpid(proc->pid, &status, 0);
             out_result->timed_out = true;
             out_result->exit_code = 124;
@@ -577,6 +590,9 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
         }
 
         if (pid == 0) {
+            if (setpgid(0, 0) != 0) {
+                _exit(127);
+            }
             if (proc->working_dir && chdir(proc->working_dir) != 0) {
                 _exit(127);
             }
@@ -592,8 +608,18 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
             _exit(127);
         }
 
+        /*
+         * The child also establishes the group before exec. The parent-side
+         * call closes the window where an immediate terminate could otherwise
+         * run before the child does so. EACCES means the child already exec'd
+         * after establishing its group; ESRCH means it already exited.
+         */
+        while (setpgid(pid, pid) != 0 && errno == EINTR) {
+        }
+
         free(argv);
         proc->pid = pid;
+        proc->process_group = pid;
         proc->spawned = true;
 
         if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
@@ -753,6 +779,6 @@ bool kano_process_terminate(KanoProcess proc) {
     return TerminateProcess(proc->process_info.hProcess, 1) != 0;
 #else
     if (!proc || !proc->spawned) return false;
-    return kill(proc->pid, SIGTERM) == 0;
+    return kano_process_signal_owned_tree(proc, SIGTERM);
 #endif
 }
