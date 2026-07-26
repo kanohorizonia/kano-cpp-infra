@@ -20,8 +20,9 @@
     { "suite": "tui", "match": { "any": ["kano_git_tui_tests", "tui", "command mode", "metadata cache", "shell-executor"] } },
     { "suite": "coverage-pgo", "match": { "any": ["coverage", "cobertura", "pgo", "opencppcoverage", "microsoft-code-coverage"] } },
     { "suite": "infra", "match": { "any": ["pixi", "launcher", "wrapper", "path", "platform", "bootstrap", "report"] } },
+    { "suite": "native-integration", "match": { "any": ["kano_git_integration_tests", "[integration]", "local bare remote", "process capture"] } },
     { "suite": "generated-property", "match": { "any": ["synthetic", "generated", "property", "[Property]"] } },
-    { "suite": "external-optional", "match": { "any": ["github api", "copilot", "network", "external", "integration"] } },
+    { "suite": "external-optional", "match": { "any": ["github api", "copilot", "network", "external"] } },
     { "suite": "cli-core", "match": { "any": ["kano_git_cli_tests", "unknown command", "help", "argument", "entrypoint"] } }
   ]
 }

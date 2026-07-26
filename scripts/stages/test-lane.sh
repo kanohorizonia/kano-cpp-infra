@@ -54,6 +54,12 @@ case "$LANE" in
     REPORT_SLUG="full"
     TEST_CMD="pixi run full-test"
     ;;
+  integration)
+    REPORT_ROOT="$CPP_ROOT/.kano/tmp/pgo/integration-test-reports"
+    REPORT_SLUG="integration"
+    TEST_CMD="pixi run integration-test"
+    BDD_TEST_BINARY="kano_git_integration_tests"
+    ;;
   *)
     echo "Unknown lane: $LANE" >&2
     exit 2
@@ -74,6 +80,7 @@ export KANO_TEST_XML="$REPORT_ROOT/test-reports/$REPORT_SLUG/tests.xml"
 export KANO_BDD_METADATA_DIR="${KANO_BDD_METADATA_DIR:-$REPORT_ROOT/raw/bdd-metadata}"
 export KANO_CTEST_OUTPUT_SIZE_PASSED="${KANO_CTEST_OUTPUT_SIZE_PASSED:-262144}"
 export KANO_CTEST_OUTPUT_SIZE_FAILED="${KANO_CTEST_OUTPUT_SIZE_FAILED:-1048576}"
+BDD_TEST_BINARY="${BDD_TEST_BINARY:-kano_git_cli_tests}"
 
 mkdir -p "$REPORT_ROOT/raw"
 rm -rf -- "$KANO_BDD_METADATA_DIR"
@@ -101,6 +108,6 @@ if [[ -f "$KANO_TEST_XML" ]]; then
   kano_cpp_infra_tool generate-bdd-metadata \
     "$KANO_TEST_XML" \
     "$KANO_BDD_METADATA_DIR" \
-    "kano_git_cli_tests"
+    "$BDD_TEST_BINARY"
 fi
 bash "$INFRA_BASE_DIR/scripts/lib/package-reports-with-skill.sh"

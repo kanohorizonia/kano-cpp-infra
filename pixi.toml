@@ -58,6 +58,7 @@ ci-linux-profile-gather = "bash scripts/platform/linux/ci-profile-gather.sh"
 ci-linux-pgo-build = "bash scripts/platform/linux/ci-pgo-build.sh"
 ci-linux-pgo-test = "bash scripts/platform/linux/ci-pgo-test.sh"
 ci-linux-quick-test = "bash scripts/platform/linux/ci-quick-test.sh"
+ci-linux-integration-test = "bash scripts/platform/linux/ci-integration-test.sh"
 ci-linux-test-report = "bash scripts/platform/linux/ci-test-report.sh"
 ci-linux-coverage-all = "bash scripts/platform/linux/ci-coverage-all.sh"
 ci-linux-validate = "bash scripts/platform/linux/ci-validate.sh"
@@ -114,6 +115,7 @@ coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
 quick-test = "bash scripts/stages/test-lane.sh quick windows-ninja-msvc-release"
+integration-test = "bash scripts/stages/test-lane.sh integration windows-ninja-msvc-release"
 test = "bash scripts/stages/test-lane.sh default windows-ninja-msvc-release"
 full-test = "bash scripts/stages/test-lane.sh full windows-ninja-msvc-release"
 
@@ -153,6 +155,7 @@ coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
 quick-test = "bash scripts/stages/test-lane.sh quick linux-ninja-gcc-release"
+integration-test = "bash scripts/stages/test-lane.sh integration linux-ninja-gcc-release"
 test = "bash scripts/stages/test-lane.sh default linux-ninja-gcc-release"
 full-test = "bash scripts/stages/test-lane.sh full linux-ninja-gcc-release"
 
@@ -192,6 +195,7 @@ coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
 quick-test = "bash scripts/stages/test-lane.sh quick macos-ninja-clang-x64-release"
+integration-test = "bash scripts/stages/test-lane.sh integration macos-ninja-clang-x64-release"
 test = "bash scripts/stages/test-lane.sh default macos-ninja-clang-x64-release"
 full-test = "bash scripts/stages/test-lane.sh full macos-ninja-clang-x64-release"
 
@@ -231,5 +235,6 @@ coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
 quick-test = "bash scripts/stages/test-lane.sh quick macos-ninja-clang-arm64-release"
+integration-test = "bash scripts/stages/test-lane.sh integration macos-ninja-clang-arm64-release"
 test = "bash scripts/stages/test-lane.sh default macos-ninja-clang-arm64-release"
 full-test = "bash scripts/stages/test-lane.sh full macos-ninja-clang-arm64-release"
