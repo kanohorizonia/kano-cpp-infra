@@ -193,14 +193,19 @@ static char* kano_process_build_command_line(KanoProcess proc) {
     return cmd;
 }
 
-static bool kano_process_append_buffer(char** target, size_t* target_size, const char* data, size_t data_size) {
+static bool kano_process_append_buffer(char** target, size_t* target_size, const char* data, size_t data_size,
+                                       size_t max_size, bool* truncated) {
     char* next;
-
-    if (data_size == 0) return true;
-    next = (char*)realloc(*target, *target_size + data_size + 1);
+    size_t retained = data_size;
+    if (max_size > 0 && *target_size + retained > max_size) {
+        retained = *target_size >= max_size ? 0 : max_size - *target_size;
+        *truncated = true;
+    }
+    if (retained == 0) return true;
+    next = (char*)realloc(*target, *target_size + retained + 1);
     if (!next) return false;
-    memcpy(next + *target_size, data, data_size);
-    *target_size += data_size;
+    memcpy(next + *target_size, data, retained);
+    *target_size += retained;
     next[*target_size] = '\0';
     *target = next;
     return true;
@@ -212,27 +217,43 @@ struct KanoReaderContext {
     KanoProcessStream stream;
     char** target;
     size_t* target_size;
+    size_t max_size;
+    bool* truncated;
+    volatile LONG cancel_requested;
 };
+
+static bool kano_process_reader_cancel_requested(struct KanoReaderContext* ctx) {
+    return InterlockedCompareExchange(&ctx->cancel_requested, 0, 0) != 0;
+}
 
 static DWORD WINAPI kano_process_reader_thread(LPVOID param) {
     struct KanoReaderContext* ctx = (struct KanoReaderContext*)param;
     char buffer[8192];
     DWORD bytes_read = 0;
 
-    while (ReadFile(ctx->handle, buffer, (DWORD)sizeof(buffer), &bytes_read, NULL) && bytes_read > 0) {
-        if (!kano_process_append_buffer(ctx->target, ctx->target_size, buffer, (size_t)bytes_read)) {
+    while (!kano_process_reader_cancel_requested(ctx) &&
+           ReadFile(ctx->handle, buffer, (DWORD)sizeof(buffer), &bytes_read, NULL) &&
+           bytes_read > 0) {
+        if (kano_process_reader_cancel_requested(ctx)) break;
+        if (!kano_process_append_buffer(ctx->target, ctx->target_size, buffer, (size_t)bytes_read,
+                                        ctx->max_size, ctx->truncated)) {
             return 1;
         }
-        if (ctx->proc->output_callback) {
+        if (ctx->proc->output_callback && !kano_process_reader_cancel_requested(ctx)) {
             ctx->proc->output_callback(ctx->stream, buffer, (size_t)bytes_read, ctx->proc->user_data);
         }
     }
     return 0;
 }
 
-static void kano_process_cancel_capture_readers(KanoProcess proc, HANDLE* readers) {
+static void kano_process_request_capture_cancel(struct KanoReaderContext* contexts, HANDLE* readers) {
+    InterlockedExchange(&contexts[0].cancel_requested, 1);
+    InterlockedExchange(&contexts[1].cancel_requested, 1);
     if (readers[0]) CancelSynchronousIo(readers[0]);
     if (readers[1]) CancelSynchronousIo(readers[1]);
+}
+
+static void kano_process_close_capture_handles(KanoProcess proc) {
     if (proc->stdout_read) {
         CloseHandle(proc->stdout_read);
         proc->stdout_read = NULL;
@@ -243,13 +264,24 @@ static void kano_process_cancel_capture_readers(KanoProcess proc, HANDLE* reader
     }
 }
 
-static void kano_process_join_reader(HANDLE reader) {
-    if (!reader) return;
-    if (WaitForSingleObject(reader, 5000) == WAIT_TIMEOUT) {
-        TerminateThread(reader, 1);
-        WaitForSingleObject(reader, INFINITE);
+static DWORD kano_process_wait_capture_readers(HANDLE* readers, DWORD timeout_ms) {
+    HANDLE active[2];
+    DWORD count = 0;
+    if (readers[0]) active[count++] = readers[0];
+    if (readers[1]) active[count++] = readers[1];
+    if (count == 0) return WAIT_OBJECT_0;
+    return WaitForMultipleObjects(count, active, TRUE, timeout_ms);
+}
+
+static void kano_process_close_reader_handles(HANDLE* readers) {
+    if (readers[0]) {
+        CloseHandle(readers[0]);
+        readers[0] = NULL;
     }
-    CloseHandle(reader);
+    if (readers[1]) {
+        CloseHandle(readers[1]);
+        readers[1] = NULL;
+    }
 }
 
 #else
@@ -281,12 +313,32 @@ static int kano_process_status_to_exit_code(int status) {
 static bool kano_process_signal_owned_tree(KanoProcess proc, int signal_number) {
     if (!proc || !proc->spawned) return false;
 
-    if (proc->process_group > 0 &&
-        kill(-proc->process_group, signal_number) == 0) {
-        return true;
+    if (proc->process_group > 0) {
+        if (kill(-proc->process_group, signal_number) == 0) return true;
+        return errno == ESRCH;
     }
 
-    return kill(proc->pid, signal_number) == 0;
+    if (kill(proc->pid, signal_number) == 0) return true;
+    return errno == ESRCH;
+}
+
+static bool kano_process_signal_unreaped_tree(KanoProcess proc, int signal_number) {
+    bool signaled = false;
+    if (!proc || !proc->spawned) return false;
+
+    if (proc->process_group > 0) {
+        if (kill(-proc->process_group, signal_number) == 0 || errno == ESRCH) {
+            signaled = true;
+        }
+    }
+
+    /* The unreaped PID cannot have been recycled, even if the child called setsid(). */
+    if (proc->pid > 0) {
+        if (kill(proc->pid, signal_number) == 0 || errno == ESRCH) {
+            signaled = true;
+        }
+    }
+    return signaled;
 }
 
 static bool kano_process_make_nonblocking(int fd) {
@@ -295,13 +347,19 @@ static bool kano_process_make_nonblocking(int fd) {
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
 }
 
-static bool kano_process_append_buffer(char** target, size_t* target_size, const char* data, size_t data_size) {
+static bool kano_process_append_buffer(char** target, size_t* target_size, const char* data, size_t data_size,
+                                       size_t max_size, bool* truncated) {
     char* next;
-    if (data_size == 0) return true;
-    next = (char*)realloc(*target, *target_size + data_size + 1);
+    size_t retained = data_size;
+    if (max_size > 0 && *target_size + retained > max_size) {
+        retained = *target_size >= max_size ? 0 : max_size - *target_size;
+        *truncated = true;
+    }
+    if (retained == 0) return true;
+    next = (char*)realloc(*target, *target_size + retained + 1);
     if (!next) return false;
-    memcpy(next + *target_size, data, data_size);
-    *target_size += data_size;
+    memcpy(next + *target_size, data, retained);
+    *target_size += retained;
     next[*target_size] = '\0';
     *target = next;
     return true;
@@ -311,19 +369,21 @@ static bool kano_process_read_fd(int fd,
                                  KanoProcessStream stream,
                                  KanoProcess proc,
                                  char** target,
-                                 size_t* target_size) {
+                                 size_t* target_size, size_t max_size, bool* truncated) {
     char buffer[4096];
+    size_t remaining_budget = 65536;
     ssize_t n;
 
-    while (1) {
+    while (remaining_budget > 0) {
         n = read(fd, buffer, sizeof(buffer));
         if (n > 0) {
-            if (!kano_process_append_buffer(target, target_size, buffer, (size_t)n)) {
+            if (!kano_process_append_buffer(target, target_size, buffer, (size_t)n, max_size, truncated)) {
                 return false;
             }
             if (proc->output_callback) {
                 proc->output_callback(stream, buffer, (size_t)n, proc->user_data);
             }
+            remaining_budget -= (size_t)n;
             continue;
         }
         if (n == 0) {
@@ -337,9 +397,13 @@ static bool kano_process_read_fd(int fd,
         }
         return false;
     }
+    return true;
 }
 
-static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms, KanoProcessResult* out_result) {
+static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms,
+                                      const KanoProcessCaptureLimitsV2* limits,
+                                      KanoProcessResultV2* out_result) {
+    const long long cleanup_grace_ms = 1000;
     char* stdout_buf = NULL;
     char* stderr_buf = NULL;
     size_t stdout_size = 0;
@@ -349,6 +413,8 @@ static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms, KanoProc
     int process_done = 0;
     int status = 0;
     long long start_ms = kano_process_now_ms();
+    long long primary_deadline_ms = timeout_ms > 0 ? start_ms + (long long)timeout_ms : 0;
+    long long cleanup_deadline_ms = 0;
 
     while (!process_done || stdout_open || stderr_open) {
         struct pollfd fds[2];
@@ -357,17 +423,14 @@ static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms, KanoProc
         int poll_rc;
         pid_t waited;
 
-        if (timeout_ms > 0) {
-            long long elapsed = kano_process_now_ms() - start_ms;
-            long long remaining = (long long)timeout_ms - elapsed;
-            if (remaining <= 0 && !process_done) {
-                kano_process_signal_owned_tree(proc, SIGKILL);
-                out_result->timed_out = true;
-                out_result->exit_code = 124;
-                timeout_ms = 0;
-            } else if (remaining > 0 && remaining < poll_timeout) {
-                poll_timeout = (int)remaining;
-            }
+        if (out_result->timed_out) {
+            long long remaining = cleanup_deadline_ms - kano_process_now_ms();
+            poll_timeout = remaining > 0 && remaining < poll_timeout ? (int)remaining :
+                           remaining <= 0 ? 0 : poll_timeout;
+        } else if (primary_deadline_ms > 0) {
+            long long remaining = primary_deadline_ms - kano_process_now_ms();
+            poll_timeout = remaining > 0 && remaining < poll_timeout ? (int)remaining :
+                           remaining <= 0 ? 0 : poll_timeout;
         }
 
         if (stdout_open) {
@@ -383,57 +446,120 @@ static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms, KanoProc
             nfds += 1;
         }
 
-        if (nfds > 0) {
-            poll_rc = poll(fds, nfds, poll_timeout);
-            if (poll_rc < 0 && errno != EINTR) {
-                free(stdout_buf);
-                free(stderr_buf);
-                return false;
-            }
-            if (poll_rc > 0) {
-                nfds_t index = 0;
-                if (stdout_open) {
-                    if (fds[index].revents & (POLLIN | POLLHUP)) {
-                        if (!kano_process_read_fd(proc->stdout_fd, KANO_PROCESS_STREAM_STDOUT, proc, &stdout_buf, &stdout_size)) {
-                            close(proc->stdout_fd);
-                            proc->stdout_fd = -1;
-                            stdout_open = 0;
-                        }
+        poll_rc = poll(fds, nfds, poll_timeout);
+        if (poll_rc < 0 && errno != EINTR) {
+            free(stdout_buf);
+            free(stderr_buf);
+            return false;
+        }
+        if (poll_rc > 0) {
+            nfds_t index = 0;
+            if (stdout_open) {
+                if (fds[index].revents & (POLLIN | POLLHUP)) {
+                    if (!kano_process_read_fd(proc->stdout_fd, KANO_PROCESS_STREAM_STDOUT, proc, &stdout_buf, &stdout_size,
+                                              limits ? limits->stdout_max_bytes : 0, &out_result->stdout_truncated)) {
+                        close(proc->stdout_fd);
+                        proc->stdout_fd = -1;
+                        stdout_open = 0;
                     }
-                    index += 1;
                 }
-                if (stderr_open) {
-                    if (fds[index].revents & (POLLIN | POLLHUP)) {
-                        if (!kano_process_read_fd(proc->stderr_fd, KANO_PROCESS_STREAM_STDERR, proc, &stderr_buf, &stderr_size)) {
-                            close(proc->stderr_fd);
-                            proc->stderr_fd = -1;
-                            stderr_open = 0;
-                        }
+                if (stdout_open && (fds[index].revents & (POLLERR | POLLNVAL))) {
+                    close(proc->stdout_fd);
+                    proc->stdout_fd = -1;
+                    stdout_open = 0;
+                }
+                index += 1;
+            }
+            if (stderr_open) {
+                if (fds[index].revents & (POLLIN | POLLHUP)) {
+                    if (!kano_process_read_fd(proc->stderr_fd, KANO_PROCESS_STREAM_STDERR, proc, &stderr_buf, &stderr_size,
+                                              limits ? limits->stderr_max_bytes : 0, &out_result->stderr_truncated)) {
+                        close(proc->stderr_fd);
+                        proc->stderr_fd = -1;
+                        stderr_open = 0;
                     }
+                }
+                if (stderr_open && (fds[index].revents & (POLLERR | POLLNVAL))) {
+                    close(proc->stderr_fd);
+                    proc->stderr_fd = -1;
+                    stderr_open = 0;
                 }
             }
         }
 
-        if (!process_done) {
+        /*
+         * Before timeout, keep an exited leader unreaped while a capture FD is
+         * still open. The zombie reserves its PID/PGID until the deadline, so
+         * a later group signal cannot target a recycled unrelated process.
+         */
+        if (!process_done && (out_result->timed_out || (!stdout_open && !stderr_open))) {
             waited = waitpid(proc->pid, &status, WNOHANG);
             if (waited == proc->pid) {
                 process_done = 1;
                 if (!out_result->timed_out) {
                     out_result->exit_code = kano_process_status_to_exit_code(status);
                 }
+            } else if (waited < 0 && errno == ECHILD) {
+                process_done = 1;
+            } else if (waited < 0 && errno != EINTR) {
+                free(stdout_buf);
+                free(stderr_buf);
+                return false;
             }
+        }
+
+        if (process_done && !stdout_open && !stderr_open) break;
+
+        if (!out_result->timed_out && primary_deadline_ms > 0 &&
+            kano_process_now_ms() >= primary_deadline_ms) {
+            kano_process_signal_unreaped_tree(proc, SIGKILL);
+            out_result->timed_out = true;
+            out_result->exit_code = 124;
+            cleanup_deadline_ms = primary_deadline_ms + cleanup_grace_ms;
+            continue;
+        }
+
+        if (out_result->timed_out && kano_process_now_ms() >= cleanup_deadline_ms) {
+            /* One last non-blocking drain, then stop waiting for inherited writers. */
+            if (stdout_open) {
+                kano_process_read_fd(proc->stdout_fd, KANO_PROCESS_STREAM_STDOUT, proc,
+                                     &stdout_buf, &stdout_size,
+                                     limits ? limits->stdout_max_bytes : 0,
+                                     &out_result->stdout_truncated);
+                close(proc->stdout_fd);
+                proc->stdout_fd = -1;
+                stdout_open = 0;
+            }
+            if (stderr_open) {
+                kano_process_read_fd(proc->stderr_fd, KANO_PROCESS_STREAM_STDERR, proc,
+                                     &stderr_buf, &stderr_size,
+                                     limits ? limits->stderr_max_bytes : 0,
+                                     &out_result->stderr_truncated);
+                close(proc->stderr_fd);
+                proc->stderr_fd = -1;
+                stderr_open = 0;
+            }
+            if (!process_done) {
+                waited = waitpid(proc->pid, &status, WNOHANG);
+                if (waited == proc->pid || (waited < 0 && errno == ECHILD)) {
+                    process_done = 1;
+                }
+            }
+            break;
         }
     }
 
     out_result->stdout_data = stdout_buf;
+    out_result->stdout_size = stdout_size;
     out_result->stderr_data = stderr_buf;
+    out_result->stderr_size = stderr_size;
     if (!out_result->timed_out) {
         out_result->exit_code = kano_process_status_to_exit_code(status);
     }
     return true;
 }
 
-static bool kano_process_wait_passthrough(KanoProcess proc, int timeout_ms, KanoProcessResult* out_result) {
+static bool kano_process_wait_passthrough(KanoProcess proc, int timeout_ms, KanoProcessResultV2* out_result) {
     int status = 0;
     long long start_ms = kano_process_now_ms();
 
@@ -447,7 +573,7 @@ static bool kano_process_wait_passthrough(KanoProcess proc, int timeout_ms, Kano
             return false;
         }
         if (timeout_ms > 0 && (kano_process_now_ms() - start_ms) >= timeout_ms) {
-            kano_process_signal_owned_tree(proc, SIGKILL);
+            kano_process_signal_unreaped_tree(proc, SIGKILL);
             waitpid(proc->pid, &status, 0);
             out_result->timed_out = true;
             out_result->exit_code = 124;
@@ -636,52 +762,150 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
 #endif
 }
 
-bool kano_process_wait(KanoProcess proc, int timeout_ms, KanoProcessResult* out_result) {
-    if (!proc || !out_result || !proc->spawned) return false;
+bool kano_process_wait_v2(KanoProcess proc, int timeout_ms,
+                          const KanoProcessCaptureLimitsV2* limits,
+                          KanoProcessResultV2* out_result) {
+    if (!out_result) return false;
     memset(out_result, 0, sizeof(*out_result));
+    if (!proc || !proc->spawned) return false;
 #ifdef _WIN32
     DWORD wait_result;
     if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
-        HANDLE readers[2];
-        struct KanoReaderContext stdout_ctx;
-        struct KanoReaderContext stderr_ctx;
+        const ULONGLONG cleanup_grace_ms = 1000;
+        HANDLE readers[2] = {NULL, NULL};
+        struct KanoReaderContext contexts[2];
         char* stdout_buf = NULL;
         char* stderr_buf = NULL;
         size_t stdout_size = 0;
         size_t stderr_size = 0;
+        bool process_done = false;
+        bool reader_done[2] = {false, false};
+        bool wait_failed = false;
+        ULONGLONG primary_deadline = timeout_ms > 0 ? GetTickCount64() + (ULONGLONG)timeout_ms : 0;
 
-        stdout_ctx.proc = proc;
-        stdout_ctx.handle = proc->stdout_read;
-        stdout_ctx.stream = KANO_PROCESS_STREAM_STDOUT;
-        stdout_ctx.target = &stdout_buf;
-        stdout_ctx.target_size = &stdout_size;
-        stderr_ctx.proc = proc;
-        stderr_ctx.handle = proc->stderr_read;
-        stderr_ctx.stream = KANO_PROCESS_STREAM_STDERR;
-        stderr_ctx.target = &stderr_buf;
-        stderr_ctx.target_size = &stderr_size;
+        memset(contexts, 0, sizeof(contexts));
+        contexts[0].proc = proc;
+        contexts[0].handle = proc->stdout_read;
+        contexts[0].stream = KANO_PROCESS_STREAM_STDOUT;
+        contexts[0].target = &stdout_buf;
+        contexts[0].target_size = &stdout_size;
+        contexts[0].max_size = limits ? limits->stdout_max_bytes : 0;
+        contexts[0].truncated = &out_result->stdout_truncated;
+        contexts[1].proc = proc;
+        contexts[1].handle = proc->stderr_read;
+        contexts[1].stream = KANO_PROCESS_STREAM_STDERR;
+        contexts[1].target = &stderr_buf;
+        contexts[1].target_size = &stderr_size;
+        contexts[1].max_size = limits ? limits->stderr_max_bytes : 0;
+        contexts[1].truncated = &out_result->stderr_truncated;
 
-        readers[0] = CreateThread(NULL, 0, kano_process_reader_thread, &stdout_ctx, 0, NULL);
-        readers[1] = CreateThread(NULL, 0, kano_process_reader_thread, &stderr_ctx, 0, NULL);
-
-        wait_result = WaitForSingleObject(proc->process_info.hProcess, timeout_ms > 0 ? (DWORD)timeout_ms : INFINITE);
-        if (wait_result == WAIT_TIMEOUT) {
-            out_result->timed_out = true;
-            out_result->exit_code = 124;
+        readers[0] = CreateThread(NULL, 0, kano_process_reader_thread, &contexts[0], 0, NULL);
+        readers[1] = CreateThread(NULL, 0, kano_process_reader_thread, &contexts[1], 0, NULL);
+        if (!readers[0] || !readers[1]) {
             if (proc->job) {
-                TerminateJobObject(proc->job, 124);
+                TerminateJobObject(proc->job, 1);
             } else {
-                TerminateProcess(proc->process_info.hProcess, 124);
+                TerminateProcess(proc->process_info.hProcess, 1);
             }
-            WaitForSingleObject(proc->process_info.hProcess, 5000);
-            kano_process_cancel_capture_readers(proc, readers);
+            kano_process_request_capture_cancel(contexts, readers);
+            kano_process_wait_capture_readers(readers, INFINITE);
+            kano_process_close_reader_handles(readers);
+            kano_process_close_capture_handles(proc);
+            free(stdout_buf);
+            free(stderr_buf);
+            return false;
         }
 
-        kano_process_join_reader(readers[0]);
-        kano_process_join_reader(readers[1]);
+        while (!process_done || !reader_done[0] || !reader_done[1]) {
+            HANDLE active[3];
+            DWORD active_count = 0;
+            DWORD wait_ms = INFINITE;
+
+            if (!process_done && WaitForSingleObject(proc->process_info.hProcess, 0) == WAIT_OBJECT_0) {
+                process_done = true;
+            }
+            if (!reader_done[0] && WaitForSingleObject(readers[0], 0) == WAIT_OBJECT_0) {
+                reader_done[0] = true;
+            }
+            if (!reader_done[1] && WaitForSingleObject(readers[1], 0) == WAIT_OBJECT_0) {
+                reader_done[1] = true;
+            }
+            if (process_done && reader_done[0] && reader_done[1]) break;
+
+            if (primary_deadline > 0) {
+                ULONGLONG now = GetTickCount64();
+                ULONGLONG remaining;
+                if (now >= primary_deadline) {
+                    out_result->timed_out = true;
+                    break;
+                }
+                remaining = primary_deadline - now;
+                wait_ms = remaining > (ULONGLONG)MAXDWORD ? MAXDWORD : (DWORD)remaining;
+            }
+
+            if (!process_done) active[active_count++] = proc->process_info.hProcess;
+            if (!reader_done[0]) active[active_count++] = readers[0];
+            if (!reader_done[1]) active[active_count++] = readers[1];
+            wait_result = WaitForMultipleObjects(active_count, active, FALSE, wait_ms);
+            if (wait_result == WAIT_TIMEOUT) {
+                out_result->timed_out = true;
+                break;
+            }
+            if (wait_result == WAIT_FAILED) {
+                wait_failed = true;
+                break;
+            }
+        }
+
+        if (out_result->timed_out || wait_failed) {
+            DWORD reader_wait;
+            ULONGLONG cleanup_deadline = out_result->timed_out && primary_deadline > 0
+                ? primary_deadline + cleanup_grace_ms
+                : GetTickCount64() + cleanup_grace_ms;
+            ULONGLONG cleanup_now;
+            DWORD cleanup_wait_ms;
+
+            if (out_result->timed_out) {
+                out_result->exit_code = 124;
+            }
+            if (proc->job) {
+                TerminateJobObject(proc->job, out_result->timed_out ? 124 : 1);
+            } else if (!process_done) {
+                TerminateProcess(proc->process_info.hProcess, out_result->timed_out ? 124 : 1);
+            }
+            kano_process_request_capture_cancel(contexts, readers);
+
+            cleanup_now = GetTickCount64();
+            cleanup_wait_ms = cleanup_deadline > cleanup_now
+                ? (DWORD)(cleanup_deadline - cleanup_now)
+                : 0;
+            reader_wait = kano_process_wait_capture_readers(readers, cleanup_wait_ms);
+            if (reader_wait != WAIT_OBJECT_0) {
+                /*
+                 * Cancellation plus closing the owned Job normally releases
+                 * both reads within the shared grace. A user callback that is
+                 * itself blocked remains outside the process timeout contract;
+                 * wait for it rather than corrupting the host with TerminateThread.
+                 */
+                kano_process_request_capture_cancel(contexts, readers);
+                kano_process_wait_capture_readers(readers, INFINITE);
+            }
+        }
+
+        kano_process_close_reader_handles(readers);
+        kano_process_close_capture_handles(proc);
+
+        if (wait_failed) {
+            free(stdout_buf);
+            free(stderr_buf);
+            memset(out_result, 0, sizeof(*out_result));
+            return false;
+        }
 
         out_result->stdout_data = stdout_buf;
+        out_result->stdout_size = stdout_size;
         out_result->stderr_data = stderr_buf;
+        out_result->stderr_size = stderr_size;
     } else {
         wait_result = WaitForSingleObject(proc->process_info.hProcess, timeout_ms > 0 ? (DWORD)timeout_ms : INFINITE);
         if (wait_result == WAIT_TIMEOUT) {
@@ -704,10 +928,25 @@ bool kano_process_wait(KanoProcess proc, int timeout_ms, KanoProcessResult* out_
     return true;
 #else
     if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
-        return kano_process_wait_capture(proc, timeout_ms, out_result);
+        return kano_process_wait_capture(proc, timeout_ms, limits, out_result);
     }
     return kano_process_wait_passthrough(proc, timeout_ms, out_result);
 #endif
+}
+
+bool kano_process_wait(KanoProcess proc, int timeout_ms, KanoProcessResult* out_result) {
+    KanoProcessResultV2 v2;
+    bool ok;
+    if (!out_result) return false;
+    memset(out_result, 0, sizeof(*out_result));
+    memset(&v2, 0, sizeof(v2));
+    ok = kano_process_wait_v2(proc, timeout_ms, NULL, &v2);
+    if (!ok) return false;
+    out_result->exit_code = v2.exit_code;
+    out_result->stdout_data = v2.stdout_data;
+    out_result->stderr_data = v2.stderr_data;
+    out_result->timed_out = v2.timed_out;
+    return true;
 }
 
 void kano_process_free(KanoProcess proc) {
@@ -736,6 +975,13 @@ void kano_process_free_result(KanoProcessResult* result) {
     memset(result, 0, sizeof(*result));
 }
 
+void kano_process_free_result_v2(KanoProcessResultV2* result) {
+    if (!result) return;
+    free(result->stdout_data);
+    free(result->stderr_data);
+    memset(result, 0, sizeof(*result));
+}
+
 bool kano_process_run(const char* executable, KanoProcessResult* out_result, ...) {
     KanoProcessOptions options;
 
@@ -746,12 +992,31 @@ bool kano_process_run(const char* executable, KanoProcessResult* out_result, ...
 }
 
 bool kano_process_run_ex(const KanoProcessOptions* options, KanoProcessResult* out_result) {
+    KanoProcessResultV2 v2;
+    bool ok;
+    if (!out_result) return false;
+    memset(out_result, 0, sizeof(*out_result));
+    memset(&v2, 0, sizeof(v2));
+    ok = kano_process_run_ex_v2(options, NULL, &v2);
+    if (!ok) return false;
+    out_result->exit_code = v2.exit_code;
+    out_result->stdout_data = v2.stdout_data;
+    out_result->stderr_data = v2.stderr_data;
+    out_result->timed_out = v2.timed_out;
+    return true;
+}
+
+bool kano_process_run_ex_v2(const KanoProcessOptions* options,
+                            const KanoProcessCaptureLimitsV2* limits,
+                            KanoProcessResultV2* out_result) {
     KanoProcess proc;
     bool ok;
 
+    if (!out_result) return false;
+    memset(out_result, 0, sizeof(*out_result));
     proc = kano_process_spawn_ex(options);
     if (!proc) return false;
-    ok = kano_process_wait(proc, options ? options->timeout_ms : 0, out_result);
+    ok = kano_process_wait_v2(proc, options ? options->timeout_ms : 0, limits, out_result);
     kano_process_free(proc);
     return ok;
 }

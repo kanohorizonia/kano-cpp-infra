@@ -1844,12 +1844,25 @@ int CommandRunProfileMatrix(const std::vector<std::string>& Args) {
         Options.argv = Argv.data();
         Options.argv_count = Argv.size();
         Options.mode = KANO_PROCESS_MODE_CAPTURE;
-        KanoProcessResult ProcResult{};
-        const bool bRan = kano_process_run_ex(&Options, &ProcResult);
+        KanoProcessCaptureLimitsV2 CaptureLimits{};
+        KanoProcessResultV2 ProcResult{};
+        const bool bRan = kano_process_run_ex_v2(&Options, &CaptureLimits, &ProcResult);
         const int ExitCode = bRan ? ProcResult.exit_code : 127;
-        WriteText(CaseRoot / "stdout.log", ProcResult.stdout_data ? ProcResult.stdout_data : "");
-        WriteText(CaseRoot / "stderr.log", ProcResult.stderr_data ? ProcResult.stderr_data : (bRan ? "" : "failed to spawn process\n"));
-        kano_process_free_result(&ProcResult);
+        WriteText(
+            CaseRoot / "stdout.log",
+            ProcResult.stdout_data
+                ? std::string(
+                      ProcResult.stdout_data,
+                      ProcResult.stdout_size)
+                : "");
+        WriteText(
+            CaseRoot / "stderr.log",
+            ProcResult.stderr_data
+                ? std::string(
+                      ProcResult.stderr_data,
+                      ProcResult.stderr_size)
+                : (bRan ? "" : "failed to spawn process\n"));
+        kano_process_free_result_v2(&ProcResult);
 
         Result["exitCode"] = ExitCode;
         Result["status"] = ExitCode == 0 ? "passed" : "failed";
