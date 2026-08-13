@@ -27,6 +27,11 @@ else()
     message(FATAL_ERROR "Unsupported KANO_JSONCPP_SOURCE_MODE: ${KANO_JSONCPP_SOURCE_MODE} (expected fetch|system)")
 endif()
 
+# jsoncpp publishes a generic BUILD_SHARED_LIBS cache option. Keep that choice
+# scoped to jsoncpp: Kano infra modules do not expose a Windows DLL ABI and are
+# embedded as static implementation libraries by consuming repositories.
+set(BUILD_SHARED_LIBS OFF)
+
 if(TARGET JsonCpp::JsonCpp)
     set(_jsoncpp_target JsonCpp::JsonCpp)
 elseif(TARGET jsoncpp_static)
