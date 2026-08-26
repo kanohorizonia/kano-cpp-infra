@@ -153,28 +153,71 @@ static KanoProcess kano_process_alloc(const KanoProcessOptions* options) {
 
 #ifdef _WIN32
 
+static size_t kano_process_windows_quote_capacity(const char* arg) {
+    size_t len;
+    if (!arg) return 3;
+    len = strlen(arg);
+    return (len * 2) + 3;
+}
+
+static char* kano_process_append_windows_quoted_arg(char* out, const char* arg) {
+    size_t backslashes = 0;
+    const char* cursor;
+
+    *out++ = '"';
+    if (!arg) {
+        *out++ = '"';
+        return out;
+    }
+
+    for (cursor = arg; *cursor; ++cursor) {
+        if (*cursor == '\\') {
+            *out++ = *cursor;
+            ++backslashes;
+            continue;
+        }
+        if (*cursor == '"') {
+            while (backslashes > 0) {
+                *out++ = '\\';
+                --backslashes;
+            }
+            *out++ = '\\';
+            *out++ = '"';
+            continue;
+        }
+        backslashes = 0;
+        *out++ = *cursor;
+    }
+    while (backslashes > 0) {
+        *out++ = '\\';
+        --backslashes;
+    }
+    *out++ = '"';
+    return out;
+}
+
 static char* kano_process_build_command_line(KanoProcess proc) {
     size_t i;
     size_t total = 0;
     char* cmd;
     char* out;
 
-    // Executable: no quotes (Windows CreateProcessA parses first token as executable name)
-    total += strlen(proc->executable);
-    // Args: quoted (skip argv[0] since it's the same as executable)
+    total += kano_process_windows_quote_capacity(proc->executable);
     for (i = 1; i < proc->arg_count; ++i) {
-        total += 3 + strlen(proc->args[i]);  // space + quote + arg + quote
+        total += 1;
+        if (kano_process_is_cmd_executable(proc->executable) && proc->args[i][0] == '/') {
+            total += strlen(proc->args[i]);
+        } else {
+            total += kano_process_windows_quote_capacity(proc->args[i]);
+        }
     }
 
     cmd = (char*)malloc(total + 1);
     if (!cmd) return NULL;
 
     out = cmd;
-    // Executable first (no quotes)
-    memcpy(out, proc->executable, strlen(proc->executable));
-    out += strlen(proc->executable);
+    out = kano_process_append_windows_quoted_arg(out, proc->executable);
 
-    // Then quoted args (skip argv[0])
     for (i = 1; i < proc->arg_count; ++i) {
         *out++ = ' ';
 #ifdef _WIN32
@@ -184,10 +227,7 @@ static char* kano_process_build_command_line(KanoProcess proc) {
             continue;
         }
 #endif
-        *out++ = '"';
-        memcpy(out, proc->args[i], strlen(proc->args[i]));
-        out += strlen(proc->args[i]);
-        *out++ = '"';
+        out = kano_process_append_windows_quoted_arg(out, proc->args[i]);
     }
     *out = '\0';
     return cmd;
