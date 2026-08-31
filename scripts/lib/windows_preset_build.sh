@@ -207,6 +207,19 @@ kano_windows_run_preset() {
   local subst_purpose="${KANO_WINDOWS_SUBST_PURPOSE:-${INF_SUBST_PURPOSE:-kano cpp build}}"
   local build_target="${KANO_WINDOWS_BUILD_TARGET:-${INF_BUILD_TARGET:-}}"
   local preferred_subst_drive="${KANO_WINDOWS_SUBST_DRIVE:-${INF_SUBST_DRIVE:-}}"
+  local skip_configure="${KANO_WINDOWS_SKIP_CONFIGURE:-${INF_SKIP_CONFIGURE:-0}}"
+  local skip_configure_args=()
+  case "${skip_configure,,}" in
+    1|true|yes|on)
+      skip_configure_args=(-SkipConfigure)
+      ;;
+    0|false|no|off|"")
+      ;;
+    *)
+      echo "KANO_WINDOWS_SKIP_CONFIGURE must be a boolean value." >&2
+      return 2
+      ;;
+  esac
 
   if [[ ! -f "$KANO_WINDOWS_PS_HELPER" ]]; then
     echo "windows preset helper script not found: $KANO_WINDOWS_PS_HELPER" >&2
@@ -265,6 +278,7 @@ kano_windows_run_preset() {
     -Arch "$in_vcvars_arch" \
     -ConfigurePreset "$in_configure_preset" \
     -BuildPreset "$in_build_preset" \
+    "${skip_configure_args[@]}" \
     -BuildTarget "$build_target" || exit_code=$?
 
   kano_windows_cleanup_subst_drive "$subst_drive" "$subst_cleanup_required" "$subst_purpose"

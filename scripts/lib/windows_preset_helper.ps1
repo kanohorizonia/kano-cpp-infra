@@ -14,6 +14,7 @@ param(
   [string]$ConfigurePreset = "",
   [string]$BuildPreset = "",
   [string]$BuildTarget = "",
+  [switch]$SkipConfigure,
   [string]$VcvarsVersion = "",
   [string]$PreferredDrive = "",
   [string]$Mode = "auto",
@@ -770,16 +771,23 @@ function Run-Preset {
 
   $vcvarsCommand = ('call "{0}" {1} -vcvars_ver={2}' -f $resolvedVcvars, $Arch, $VcvarsVersion)
   $buildCommand = Get-CMakeBuildCommand -InBuildPreset $BuildPreset -InBuildTarget $BuildTarget
-  Invoke-CmdSteps @(
+  $steps = @(
     $vcvarsCommand,
     'if errorlevel 1 exit /b %errorlevel%',
     (Get-OptionalLlvmPathStep -ConfigurePreset $ConfigurePreset),
     'set "CC="',
-    'set "CXX="',
-    $configureCommand,
-    'if errorlevel 1 exit /b %errorlevel%',
-    $buildCommand
+    'set "CXX="'
   )
+  if ($SkipConfigure) {
+    Write-Host "[launcher][cmake][info] reusing validated configure cache"
+  } else {
+    $steps += @(
+      $configureCommand,
+      'if errorlevel 1 exit /b %errorlevel%'
+    )
+  }
+  $steps += $buildCommand
+  Invoke-CmdSteps $steps
 }
 
 function Configure-Preset {

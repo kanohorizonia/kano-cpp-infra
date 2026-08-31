@@ -88,6 +88,7 @@ kano_windows_run_ps_helper() {
 }
 
 export KANO_WINDOWS_BUILD_TARGET="kog_runtime_artifact"
+export KANO_WINDOWS_SKIP_CONFIGURE="1"
 kano_windows_run_preset windows-ninja-msvc windows-ninja-msvc-release x64
 
 root_argument="$(awk '/^-Root$/{getline; print; exit}' "$PRESET_ARGS_LOG")"
@@ -105,6 +106,11 @@ if [[ "$canonical_argument" != "C:/physical/source/src/cpp" ]]; then
 fi
 if [[ "$target_argument" != "kog_runtime_artifact" ]]; then
   echo "Expected the preset action to preserve the requested build target, got '$target_argument'." >&2
+  cat "$PRESET_ARGS_LOG" >&2
+  exit 1
+fi
+if ! grep -qx -- '-SkipConfigure' "$PRESET_ARGS_LOG"; then
+  echo "Expected the preset action to forward validated configure-cache reuse." >&2
   cat "$PRESET_ARGS_LOG" >&2
   exit 1
 fi
