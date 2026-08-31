@@ -4,6 +4,7 @@ param(
 
   [string]$Path = "",
   [string]$Root = "",
+  [string]$CanonicalRoot = "",
   [string]$BuildDir = "",
   [string]$Config = "Debug",
   [string]$Generator = "Ninja",
@@ -12,7 +13,11 @@ param(
   [string]$Vcvars = "",
   [string]$ConfigurePreset = "",
   [string]$BuildPreset = "",
-  [string]$VcvarsVersion = ""
+  [string]$BuildTarget = "",
+  [string]$VcvarsVersion = "",
+  [string]$PreferredDrive = "",
+  [string]$Mode = "auto",
+  [string]$Drive = ""
 )
 
 Set-StrictMode -Version Latest
@@ -24,6 +29,165 @@ if ([string]::IsNullOrWhiteSpace($VcvarsVersion)) {
 if ([string]::IsNullOrWhiteSpace($VcvarsVersion)) {
   # Default to 2026 MSVC toolchain (14.44.35207)
   $VcvarsVersion = "14.44.35207"
+}
+
+function Get-SubstMappings {
+  $mappings = @{}
+  @(& cmd.exe /d /c subst) | ForEach-Object {
+    if ($_ -match "^([A-Z]):\\:\s*=>\s*(.+)$") {
+      $letter = $matches[1].ToUpperInvariant()
+      $target = $matches[2].Trim()
+      if (-not [string]::IsNullOrWhiteSpace($target)) {
+        $mappings[$letter] = $target
+      }
+    }
+  }
+  return $mappings
+}
+
+function Expand-SubstPath([string]$Value) {
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    return ""
+  }
+
+  $candidate = $Value.Trim()
+  if ($candidate -notmatch "^(?<drive>[A-Za-z]):(?<rest>(\\|/).*)?$") {
+    return $candidate
+  }
+
+  $driveLetter = $matches["drive"].ToUpperInvariant()
+  $mappings = Get-SubstMappings
+  if (-not $mappings.ContainsKey($driveLetter)) {
+    return $candidate
+  }
+
+  $targetRoot = $mappings[$driveLetter] -replace "/", "\"
+  while ($targetRoot.Length -gt 3 -and $targetRoot.EndsWith("\")) {
+    $targetRoot = $targetRoot.Substring(0, $targetRoot.Length - 1)
+  }
+
+  $rest = $matches["rest"]
+  if ([string]::IsNullOrWhiteSpace($rest)) {
+    return $targetRoot
+  }
+
+  $normalizedRest = $rest -replace "/", "\"
+  if ($normalizedRest.StartsWith("\")) {
+    return $targetRoot + $normalizedRest
+  }
+  return $targetRoot + "\" + $normalizedRest
+}
+
+function Resolve-AbsoluteWindowsPath([string]$Value) {
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    return ""
+  }
+
+  $candidate = Expand-SubstPath $Value
+  $resolved = Resolve-Path -LiteralPath $candidate -ErrorAction SilentlyContinue
+  if ($resolved) {
+    $candidate = $resolved.Path
+  }
+
+  $candidate = $candidate -replace "/", "\"
+  while ($candidate.Length -gt 3 -and $candidate.EndsWith("\")) {
+    $candidate = $candidate.Substring(0, $candidate.Length - 1)
+  }
+  return $candidate
+}
+
+function Get-ProjectedBuildPathLength([string]$InRoot, [string]$InPreset) {
+  $buildRoot = Join-Path $InRoot ("out\obj\" + $InPreset)
+  # CMake target directories and MSVC dependency sidecars commonly add 160+
+  # characters beyond the configured binary directory.
+  return $buildRoot.Length + 180
+}
+
+function Prepare-SubstRoot([string]$InRoot, [string]$InPreset, [string]$InPreferredDrive, [string]$InMode) {
+  $tab = [char]9
+  $root = Resolve-AbsoluteWindowsPath $InRoot
+  if ([string]::IsNullOrWhiteSpace($root)) {
+    $root = $InRoot
+  }
+
+  $modeName = $InMode.Trim().ToLowerInvariant()
+  if ([string]::IsNullOrWhiteSpace($modeName)) {
+    $modeName = "auto"
+  }
+
+  $pathLimit = 240
+  $configuredLimit = $env:KANO_WINDOWS_PATH_LIMIT
+  if ([string]::IsNullOrWhiteSpace($configuredLimit)) {
+    $configuredLimit = $env:INF_WINDOWS_PATH_LIMIT
+  }
+  if ($configuredLimit -match "^\d+$" -and [int]$configuredLimit -gt 0) {
+    $pathLimit = [int]$configuredLimit
+  }
+
+  $projectedLength = Get-ProjectedBuildPathLength -InRoot $root -InPreset $InPreset
+  $shouldMap = $modeName -eq "on" -or ($modeName -ne "off" -and $projectedLength -ge $pathLimit)
+  if (-not [string]::IsNullOrWhiteSpace($InPreferredDrive)) {
+    $shouldMap = $true
+  }
+  if (-not $shouldMap) {
+    Write-Output ($root + $tab + $tab + "0")
+    return
+  }
+
+  $mappings = Get-SubstMappings
+  foreach ($entry in $mappings.GetEnumerator()) {
+    $mappedRoot = Resolve-AbsoluteWindowsPath $entry.Value
+    if ($mappedRoot.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+      Write-Output (($entry.Key + ":\") + $tab + ($entry.Key + ":") + $tab + "0")
+      return
+    }
+  }
+
+  $preferred = ""
+  if ($InPreferredDrive -match "^([A-Za-z]):?$") {
+    $preferred = $matches[1].ToUpperInvariant()
+  }
+
+  $candidates = New-Object System.Collections.Generic.List[string]
+  if (-not [string]::IsNullOrWhiteSpace($preferred)) {
+    [void]$candidates.Add($preferred)
+  }
+  foreach ($letter in @("Z","Y","X","W","V","U","T","S","R","Q","P","O","N","M","L","K","J","I","H","G","F","E","D")) {
+    if (-not $candidates.Contains($letter)) {
+      [void]$candidates.Add($letter)
+    }
+  }
+
+  $used = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  Get-PSDrive -PSProvider FileSystem | ForEach-Object { [void]$used.Add($_.Name) }
+  foreach ($letter in $mappings.Keys) {
+    [void]$used.Add($letter)
+  }
+
+  foreach ($letter in $candidates) {
+    if ($used.Contains($letter)) {
+      continue
+    }
+    $target = $letter + ":"
+    & cmd.exe /d /c subst $target $root | Out-Null
+    if (Test-Path -LiteralPath ($target + "\")) {
+      Write-Output (($target + "\") + $tab + $target + $tab + "1")
+      return
+    }
+  }
+
+  throw ("No available SUBST drive for projected Windows build path length {0} (limit {1})." -f $projectedLength, $pathLimit)
+}
+
+function Remove-SubstDrive([string]$InDrive) {
+  if ([string]::IsNullOrWhiteSpace($InDrive)) {
+    return
+  }
+  $target = $InDrive.Trim()
+  if ($target -match "^[A-Za-z]$") {
+    $target += ":"
+  }
+  & cmd.exe /d /c subst $target /d | Out-Null
 }
 
 function Detect-VsDevCmd {
@@ -109,10 +273,18 @@ function Format-CMakeCacheArgument([string]$Name, [string]$Value) {
   return ('"-D{0}={1}"' -f $Name, $escapedValue)
 }
 
-function Get-AdditionalCMakeCacheArguments {
+function Get-AdditionalCMakeCacheArguments([string]$CanonicalSourceRoot = "") {
   $arguments = New-Object System.Collections.Generic.List[string]
   $buildPrefix = "KANO"
   $cmakeVarPrefix = "KANO"
+
+  if (-not [string]::IsNullOrWhiteSpace($CanonicalSourceRoot)) {
+    $physicalSourceRoot = Resolve-AbsoluteWindowsPath $CanonicalSourceRoot
+    if ([string]::IsNullOrWhiteSpace($physicalSourceRoot)) {
+      $physicalSourceRoot = $CanonicalSourceRoot
+    }
+    [void]$arguments.Add((Format-CMakeCacheArgument -Name "KANO_CPP_INFRA_CANONICAL_SOURCE_ROOT:PATH" -Value $physicalSourceRoot))
+  }
 
   $valueMap = @{
     "VERSION_STR" = [Environment]::GetEnvironmentVariable("${buildPrefix}_VERSION_STR")
@@ -418,6 +590,97 @@ function Get-OptionalLlvmPathStep([string]$ConfigurePreset) {
   return ('set "PATH={0};%PATH%"' -f $llvmPrefix)
 }
 
+function Add-BoundedPathEntry(
+  [System.Collections.Generic.List[string]]$Entries,
+  [System.Collections.Generic.HashSet[string]]$Seen,
+  [string]$Candidate,
+  [int]$MaxLength,
+  [bool]$Required
+) {
+  if ([string]::IsNullOrWhiteSpace($Candidate)) {
+    return $false
+  }
+  $normalized = $Candidate.Trim().Trim('"')
+  if (-not (Test-Path -LiteralPath $normalized -PathType Container)) {
+    return $false
+  }
+  if ($Seen.Contains($normalized)) {
+    return $true
+  }
+
+  $separatorLength = if ($Entries.Count -eq 0) { 0 } else { 1 }
+  $currentLength = [string]::Join(";", $Entries).Length
+  $projectedLength = $currentLength + $separatorLength + $normalized.Length
+  if ($projectedLength -gt $MaxLength) {
+    if ($Required) {
+      throw ("Required Windows build PATH entries exceed safety budget {0}." -f $MaxLength)
+    }
+    return $false
+  }
+
+  [void]$Entries.Add($normalized)
+  [void]$Seen.Add($normalized)
+  return $true
+}
+
+function Get-BoundedBuildPath([string]$OriginalPath) {
+  if ([string]::IsNullOrWhiteSpace($OriginalPath)) {
+    return $OriginalPath
+  }
+
+  $maxLength = 2048
+  $configuredLimit = $env:KANO_WINDOWS_CMD_PATH_LIMIT
+  if ([string]::IsNullOrWhiteSpace($configuredLimit)) {
+    $configuredLimit = $env:INF_WINDOWS_CMD_PATH_LIMIT
+  }
+  if ($configuredLimit -match "^\d+$" -and [int]$configuredLimit -ge 512) {
+    $maxLength = [int]$configuredLimit
+  }
+  if ($OriginalPath.Length -le $maxLength) {
+    return $OriginalPath
+  }
+
+  $pathEntries = @($OriginalPath.Split(";") | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  $selected = New-Object System.Collections.Generic.List[string]
+  $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  $coveredTools = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  $requiredTools = @("cmake.exe", "ctest.exe", "ninja.exe", "git.exe", "bash.exe", "sh.exe", "pixi.exe", "python.exe", "python3.exe")
+
+  foreach ($entry in $pathEntries) {
+    foreach ($tool in $requiredTools) {
+      if ($coveredTools.Contains($tool)) {
+        continue
+      }
+      if (Test-Path -LiteralPath (Join-Path $entry $tool) -PathType Leaf) {
+        [void](Add-BoundedPathEntry -Entries $selected -Seen $seen -Candidate $entry -MaxLength $maxLength -Required $true)
+        [void]$coveredTools.Add($tool)
+      }
+    }
+  }
+
+  $systemRoot = $env:SystemRoot
+  foreach ($systemPath in @(
+    (Join-Path $systemRoot "System32"),
+    $systemRoot,
+    (Join-Path $systemRoot "System32\Wbem"),
+    (Join-Path $systemRoot "System32\WindowsPowerShell\v1.0")
+  )) {
+    [void](Add-BoundedPathEntry -Entries $selected -Seen $seen -Candidate $systemPath -MaxLength $maxLength -Required $true)
+  }
+
+  foreach ($llvmPath in @($env:KANO_LLVM_BIN, $env:LLVM_BIN)) {
+    if (-not [string]::IsNullOrWhiteSpace($llvmPath)) {
+      [void](Add-BoundedPathEntry -Entries $selected -Seen $seen -Candidate $llvmPath -MaxLength $maxLength -Required $true)
+    }
+  }
+
+  foreach ($entry in $pathEntries) {
+    [void](Add-BoundedPathEntry -Entries $selected -Seen $seen -Candidate $entry -MaxLength $maxLength -Required $false)
+  }
+
+  return [string]::Join(";", $selected)
+}
+
 function Invoke-CmdChain([string]$CmdLine) {
   cmd.exe /d /s /c $CmdLine
   if (-not $?) { exit $LASTEXITCODE }
@@ -427,6 +690,10 @@ function Invoke-CmdSteps([string[]]$Steps) {
   if ($null -eq $Steps -or $Steps.Count -eq 0) {
     return
   }
+
+  $originalPath = $env:PATH
+  $boundedPath = Get-BoundedBuildPath -OriginalPath $originalPath
+  $pathWasBound = -not [string]::Equals($originalPath, $boundedPath, [System.StringComparison]::Ordinal)
 
   $tempBase = [System.IO.Path]::GetTempFileName()
   $tempCmd = [System.IO.Path]::ChangeExtension($tempBase, ".cmd")
@@ -442,13 +709,34 @@ function Invoke-CmdSteps([string[]]$Steps) {
     }
 
     Set-Content -LiteralPath $tempCmd -Value ($scriptLines -join "`r`n") -Encoding Ascii
+    if ($pathWasBound) {
+      Write-Host ("[launcher][path][info] bounded inherited PATH from {0} to {1} characters" -f $originalPath.Length, $boundedPath.Length)
+      $env:PATH = $boundedPath
+    }
     cmd.exe /d /c ('"{0}"' -f $tempCmd)
     if (-not $?) {
       exit $LASTEXITCODE
     }
   } finally {
+    if ($pathWasBound) {
+      $env:PATH = $originalPath
+    }
     Remove-Item -LiteralPath $tempCmd -Force -ErrorAction SilentlyContinue
   }
+}
+
+function Get-CMakeBuildCommand([string]$InBuildPreset, [string]$InBuildTarget) {
+  if ([string]::IsNullOrWhiteSpace($InBuildPreset)) {
+    throw "BuildPreset is required"
+  }
+  $command = "cmake --build --preset $InBuildPreset"
+  if ([string]::IsNullOrWhiteSpace($InBuildTarget)) {
+    return $command
+  }
+  if ($InBuildTarget -notmatch "^[A-Za-z0-9_.:+-]+$") {
+    throw "BuildTarget contains unsupported characters"
+  }
+  return "$command --target $InBuildTarget"
 }
 
 function Run-Preset {
@@ -462,13 +750,17 @@ function Run-Preset {
   # Validate that the selected MSVC toolset has all required headers
   Validate-MsvcToolsetHeaders -VcvarsVersion $VcvarsVersion
 
+  $canonicalSourceRoot = $CanonicalRoot
+  if ([string]::IsNullOrWhiteSpace($canonicalSourceRoot)) {
+    $canonicalSourceRoot = Resolve-AbsoluteWindowsPath $Root
+  }
   $rootPath = (Resolve-Path -LiteralPath $Root).Path
   Set-Location -LiteralPath $rootPath
   $pixiNinjaPath = Get-PixiNinjaPath -ProjectRoot $rootPath
 
   $configureCommand = "cmake --preset $ConfigurePreset"
   $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM:FILEPATH" -Value $pixiNinjaPath)
-  foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
+  foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments -CanonicalSourceRoot $canonicalSourceRoot)) { $configureCommand += " " + $additionalArgument }
   $sdkTools = Get-WindowsSdkToolPaths
   if ($sdkTools) {
     $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MT" -Value $sdkTools.Mt)
@@ -477,6 +769,7 @@ function Run-Preset {
   }
 
   $vcvarsCommand = ('call "{0}" {1} -vcvars_ver={2}' -f $resolvedVcvars, $Arch, $VcvarsVersion)
+  $buildCommand = Get-CMakeBuildCommand -InBuildPreset $BuildPreset -InBuildTarget $BuildTarget
   Invoke-CmdSteps @(
     $vcvarsCommand,
     'if errorlevel 1 exit /b %errorlevel%',
@@ -485,7 +778,7 @@ function Run-Preset {
     'set "CXX="',
     $configureCommand,
     'if errorlevel 1 exit /b %errorlevel%',
-    "cmake --build --preset $BuildPreset"
+    $buildCommand
   )
 }
 
@@ -500,13 +793,17 @@ function Configure-Preset {
   # Validate that the selected MSVC toolset has all required headers
   Validate-MsvcToolsetHeaders -VcvarsVersion $VcvarsVersion
 
+  $canonicalSourceRoot = $CanonicalRoot
+  if ([string]::IsNullOrWhiteSpace($canonicalSourceRoot)) {
+    $canonicalSourceRoot = Resolve-AbsoluteWindowsPath $Root
+  }
   $rootPath = (Resolve-Path -LiteralPath $Root).Path
   Set-Location -LiteralPath $rootPath
   $pixiNinjaPath = Get-PixiNinjaPath -ProjectRoot $rootPath
 
   $configureCommand = "cmake --preset $ConfigurePreset"
   $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM:FILEPATH" -Value $pixiNinjaPath)
-  foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
+  foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments -CanonicalSourceRoot $canonicalSourceRoot)) { $configureCommand += " " + $additionalArgument }
   $sdkTools = Get-WindowsSdkToolPaths
   if ($sdkTools) {
     $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MT" -Value $sdkTools.Mt)
@@ -542,6 +839,10 @@ function Build-Presets {
   # Validate that the selected MSVC toolset has all required headers
   Validate-MsvcToolsetHeaders -VcvarsVersion $VcvarsVersion
 
+  $canonicalSourceRoot = $CanonicalRoot
+  if ([string]::IsNullOrWhiteSpace($canonicalSourceRoot)) {
+    $canonicalSourceRoot = Resolve-AbsoluteWindowsPath $Root
+  }
   $rootPath = if ([string]::IsNullOrWhiteSpace($Root)) { pwd } else { (Resolve-Path -LiteralPath $Root).Path }
   Set-Location -LiteralPath $rootPath
 
@@ -555,7 +856,7 @@ function Build-Presets {
     $vcvarsCommand = ('call "{0}" {1} -vcvars_ver={2}' -f $resolvedVcvars, $presetArch, $VcvarsVersion)
     $configureCommand = "cmake --preset $configurePreset"
     $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MAKE_PROGRAM:FILEPATH" -Value $pixiNinjaPath)
-    foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments)) { $configureCommand += " " + $additionalArgument }
+    foreach ($additionalArgument in (Get-AdditionalCMakeCacheArguments -CanonicalSourceRoot $canonicalSourceRoot)) { $configureCommand += " " + $additionalArgument }
     $sdkTools = Get-WindowsSdkToolPaths
     if ($sdkTools) {
       $configureCommand += " " + (Format-CMakeCacheArgument -Name "CMAKE_MT" -Value $sdkTools.Mt)
@@ -631,6 +932,24 @@ function Validate-MsvcToolsetHeaders {
 }
 
 switch ($Action) {
+  "probe" {
+    Write-Output "ok"
+  }
+  "bounded-build-path" {
+    Write-Output (Get-BoundedBuildPath -OriginalPath $Path)
+  }
+  "cmake-cache-arguments" {
+    Get-AdditionalCMakeCacheArguments -CanonicalSourceRoot $CanonicalRoot
+  }
+  "cmake-build-command" {
+    Get-CMakeBuildCommand -InBuildPreset $BuildPreset -InBuildTarget $BuildTarget
+  }
+  "prepare-subst-root" {
+    Prepare-SubstRoot -InRoot $Root -InPreset $ConfigurePreset -InPreferredDrive $PreferredDrive -InMode $Mode
+  }
+  "cleanup-subst" {
+    Remove-SubstDrive -InDrive $Drive
+  }
   "detect-vcvarsall" {
     $found = Detect-Vcvarsall
     if ($found) { Write-Output $found }

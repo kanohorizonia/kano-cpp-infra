@@ -63,17 +63,11 @@ kano_windows_powershell_bin() {
   return 1
 }
 
-kano_windows_run_ps_helper() {
-  local powershell_bin=""
-  powershell_bin="$(kano_windows_powershell_bin)" || return 127
+KANO_WINDOWS_PS_HELPER_MODE="${KANO_WINDOWS_PS_HELPER_MODE:-}"
 
-  # Preferred path: invoke helper as a script file.
-  if "$powershell_bin" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$KANO_WINDOWS_PS_HELPER" "$@" 2>/dev/null; then
-    return 0
-  fi
-
-  # Fallback for environments enforcing AllSigned policy: load helper content
-  # as text and execute it as a scriptblock in-process (no -File execution).
+kano_windows_run_ps_helper_scriptblock() {
+  local powershell_bin="$1"
+  shift
   local helper_path_for_ps="$KANO_WINDOWS_PS_HELPER"
   if command -v cygpath >/dev/null 2>&1; then
     helper_path_for_ps="$(cygpath -w "$KANO_WINDOWS_PS_HELPER" 2>/dev/null || printf '%s' "$KANO_WINDOWS_PS_HELPER")"
@@ -104,6 +98,32 @@ kano_windows_run_ps_helper() {
   done
 
   "$powershell_bin" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "\$script = Get-Content -Raw -LiteralPath '$helper_escaped'; \$sb = [ScriptBlock]::Create(\$script); & \$sb$forwarded_args"
+}
+
+kano_windows_select_ps_helper_mode() {
+  local powershell_bin="$1"
+  if [[ -n "$KANO_WINDOWS_PS_HELPER_MODE" ]]; then
+    return 0
+  fi
+
+  if "$powershell_bin" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$KANO_WINDOWS_PS_HELPER" -Action probe >/dev/null 2>&1; then
+    KANO_WINDOWS_PS_HELPER_MODE="file"
+  else
+    KANO_WINDOWS_PS_HELPER_MODE="scriptblock"
+  fi
+}
+
+kano_windows_run_ps_helper() {
+  local powershell_bin=""
+  powershell_bin="$(kano_windows_powershell_bin)" || return 127
+  kano_windows_select_ps_helper_mode "$powershell_bin"
+
+  if [[ "$KANO_WINDOWS_PS_HELPER_MODE" == "file" ]]; then
+    "$powershell_bin" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$KANO_WINDOWS_PS_HELPER" "$@"
+    return $?
+  fi
+
+  kano_windows_run_ps_helper_scriptblock "$powershell_bin" "$@"
 }
 
 kano_windows_file_exists() {
@@ -145,15 +165,57 @@ kano_windows_detect_vcvarsall() {
   return 1
 }
 
+kano_windows_native_root() {
+  local root="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$root"
+    return
+  fi
+  (cd "$root" && pwd -W)
+}
+
+kano_windows_prepare_subst_root() {
+  local root="$1"
+  local configure_preset="$2"
+  local preferred_drive="$3"
+  local mode="${KANO_WINDOWS_SUBST_MODE:-${INF_SUBST_MODE:-auto}}"
+  kano_windows_run_ps_helper \
+    -Action prepare-subst-root \
+    -Root "$root" \
+    -ConfigurePreset "$configure_preset" \
+    -PreferredDrive "$preferred_drive" \
+    -Mode "$mode" |
+    tr -d '\r'
+}
+
+kano_windows_cleanup_subst_drive() {
+  local drive="$1"
+  local cleanup_required="$2"
+  local purpose="$3"
+  if [[ "$cleanup_required" != "1" || -z "$drive" ]]; then
+    return 0
+  fi
+
+  kano_windows_run_ps_helper -Action cleanup-subst -Drive "$drive" >/dev/null 2>&1 || true
+  echo "[launcher][subst][info] unmapped $drive (purpose: $purpose)" >&2
+}
+
 kano_windows_run_preset() {
   local in_configure_preset="$1"
   local in_build_preset="$2"
   local in_vcvars_arch="$3"
+  local subst_purpose="${KANO_WINDOWS_SUBST_PURPOSE:-${INF_SUBST_PURPOSE:-kano cpp build}}"
+  local build_target="${KANO_WINDOWS_BUILD_TARGET:-${INF_BUILD_TARGET:-}}"
+  local preferred_subst_drive="${KANO_WINDOWS_SUBST_DRIVE:-${INF_SUBST_DRIVE:-}}"
 
   if [[ ! -f "$KANO_WINDOWS_PS_HELPER" ]]; then
     echo "windows preset helper script not found: $KANO_WINDOWS_PS_HELPER" >&2
     exit 1
   fi
+
+  local powershell_bin=""
+  powershell_bin="$(kano_windows_powershell_bin)" || return 127
+  kano_windows_select_ps_helper_mode "$powershell_bin"
 
   local requested_vcvars="${KANO_VCVARSALL:-${KOB_VCVARSALL:-}}"
   local resolved_vcvars=""
@@ -177,23 +239,52 @@ kano_windows_run_preset() {
   export KANO_CPP_INFRA_LLVM_PREFIX=""
   kano_cpp_print_self_build_toolchain
 
+  local native_root=""
+  native_root="$(kano_windows_native_root "$(kano_windows_cpp_root)")"
+  local build_root="$native_root"
+  local subst_drive=""
+  local subst_cleanup_required="0"
+  local subst_result=""
+  subst_result="$(kano_windows_prepare_subst_root "$native_root" "$in_configure_preset" "$preferred_subst_drive")"
+  if [[ -n "$subst_result" ]]; then
+    build_root="${subst_result%%$'\t'*}"
+    local subst_tail="${subst_result#*$'\t'}"
+    subst_drive="${subst_tail%%$'\t'*}"
+    subst_cleanup_required="${subst_result##*$'\t'}"
+  fi
+  if [[ -n "$subst_drive" && "$build_root" != "$native_root" ]]; then
+    echo "[launcher][subst][info] mapped $subst_drive -> $native_root (purpose: $subst_purpose)" >&2
+  fi
+
+  local exit_code=0
   kano_windows_run_ps_helper \
     -Action run-preset \
-    -Root "$(kano_windows_cpp_root)" \
+    -Root "$build_root" \
+    -CanonicalRoot "$native_root" \
     -Vcvars "$resolved_vcvars" \
     -Arch "$in_vcvars_arch" \
     -ConfigurePreset "$in_configure_preset" \
-    -BuildPreset "$in_build_preset"
+    -BuildPreset "$in_build_preset" \
+    -BuildTarget "$build_target" || exit_code=$?
+
+  kano_windows_cleanup_subst_drive "$subst_drive" "$subst_cleanup_required" "$subst_purpose"
+  return "$exit_code"
 }
 
 kano_windows_configure_preset() {
   local in_configure_preset="$1"
   local in_vcvars_arch="$2"
+  local subst_purpose="${KANO_WINDOWS_SUBST_PURPOSE:-${INF_SUBST_PURPOSE:-kano cpp configure}}"
+  local preferred_subst_drive="${KANO_WINDOWS_SUBST_DRIVE:-${INF_SUBST_DRIVE:-}}"
 
   if [[ ! -f "$KANO_WINDOWS_PS_HELPER" ]]; then
     echo "windows preset helper script not found: $KANO_WINDOWS_PS_HELPER" >&2
     exit 1
   fi
+
+  local powershell_bin=""
+  powershell_bin="$(kano_windows_powershell_bin)" || return 127
+  kano_windows_select_ps_helper_mode "$powershell_bin"
 
   local requested_vcvars="${KANO_VCVARSALL:-${KOB_VCVARSALL:-}}"
   local resolved_vcvars=""
@@ -212,12 +303,34 @@ kano_windows_configure_preset() {
   kano_windows_apply_self_build_config
   kano_windows_collect_build_metadata
 
+  local native_root=""
+  native_root="$(kano_windows_native_root "$(kano_windows_cpp_root)")"
+  local build_root="$native_root"
+  local subst_drive=""
+  local subst_cleanup_required="0"
+  local subst_result=""
+  subst_result="$(kano_windows_prepare_subst_root "$native_root" "$in_configure_preset" "$preferred_subst_drive")"
+  if [[ -n "$subst_result" ]]; then
+    build_root="${subst_result%%$'\t'*}"
+    local subst_tail="${subst_result#*$'\t'}"
+    subst_drive="${subst_tail%%$'\t'*}"
+    subst_cleanup_required="${subst_result##*$'\t'}"
+  fi
+  if [[ -n "$subst_drive" && "$build_root" != "$native_root" ]]; then
+    echo "[launcher][subst][info] mapped $subst_drive -> $native_root (purpose: $subst_purpose)" >&2
+  fi
+
+  local exit_code=0
   kano_windows_run_ps_helper \
     -Action configure-preset \
-    -Root "$(kano_windows_cpp_root)" \
+    -Root "$build_root" \
+    -CanonicalRoot "$native_root" \
     -Vcvars "$resolved_vcvars" \
     -Arch "$in_vcvars_arch" \
-    -ConfigurePreset "$in_configure_preset"
+    -ConfigurePreset "$in_configure_preset" || exit_code=$?
+
+  kano_windows_cleanup_subst_drive "$subst_drive" "$subst_cleanup_required" "$subst_purpose"
+  return "$exit_code"
 }
 
 # backlog compatibility aliases
