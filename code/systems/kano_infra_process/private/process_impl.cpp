@@ -60,6 +60,24 @@ static char* kano_process_dup_string(const char* value) {
 }
 
 #ifdef _WIN32
+static wchar_t* kano_process_utf8_to_wide(const char* value) {
+    int required;
+    wchar_t* out;
+
+    if (!value) return NULL;
+    required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1, NULL, 0);
+    if (required <= 0) return NULL;
+    out = (wchar_t*)malloc((size_t)required * sizeof(*out));
+    if (!out) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value, -1, out, required) <= 0) {
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+#endif
+
+#ifdef _WIN32
 static bool kano_process_is_cmd_executable(const char* executable) {
     const char* base = executable;
     const char* cursor;
@@ -604,11 +622,21 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
         SECURITY_ATTRIBUTES sa;
         HANDLE stdout_write = NULL;
         HANDLE stderr_write = NULL;
-        STARTUPINFOA si;
+        STARTUPINFOW si;
         BOOL ok;
+        wchar_t* command_line;
+        wchar_t* working_dir;
 
         proc->cmdline = kano_process_build_command_line(proc);
         if (!proc->cmdline) {
+            kano_process_free(proc);
+            return NULL;
+        }
+        command_line = kano_process_utf8_to_wide(proc->cmdline);
+        working_dir = proc->working_dir ? kano_process_utf8_to_wide(proc->working_dir) : NULL;
+        if (!command_line || (proc->working_dir && !working_dir)) {
+            free(command_line);
+            free(working_dir);
             kano_process_free(proc);
             return NULL;
         }
@@ -620,10 +648,10 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
         if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
             if (!CreatePipe(&proc->stdout_read, &stdout_write, &sa, 0) ||
                 !CreatePipe(&proc->stderr_read, &stderr_write, &sa, 0)) {
-                if (proc->stdout_read) CloseHandle(proc->stdout_read);
                 if (stdout_write) CloseHandle(stdout_write);
-                if (proc->stderr_read) CloseHandle(proc->stderr_read);
                 if (stderr_write) CloseHandle(stderr_write);
+                free(command_line);
+                free(working_dir);
                 kano_process_free(proc);
                 return NULL;
             }
@@ -640,28 +668,28 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
             si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         }
 
-        ok = CreateProcessA(
+        ok = CreateProcessW(
             NULL,
-            proc->cmdline,
+            command_line,
             NULL,
             NULL,
             proc->mode == KANO_PROCESS_MODE_CAPTURE ? TRUE : FALSE,
             CREATE_SUSPENDED,
             NULL,
-            proc->working_dir,
+            working_dir,
             &si,
             &proc->process_info
         );
+        free(command_line);
+        free(working_dir);
         if (!ok) {
-            if (proc->stdout_read) CloseHandle(proc->stdout_read);
             if (stdout_write) CloseHandle(stdout_write);
-            if (proc->stderr_read) CloseHandle(proc->stderr_read);
             if (stderr_write) CloseHandle(stderr_write);
             kano_process_free(proc);
             return NULL;
         }
 
-        proc->job = CreateJobObjectA(NULL, NULL);
+        proc->job = CreateJobObjectW(NULL, NULL);
         if (proc->job != NULL) {
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit_info;
             memset(&limit_info, 0, sizeof(limit_info));
