@@ -114,6 +114,7 @@ profile-run-manifest = "bash scripts/stages/profile-run-manifest.sh"
 coverage-all = "bash scripts/workflows/coverage-all.sh"
 
 # Tests
+windows-wrapper-contract-test = "bash scripts/tests/windows_preset_build_contract.sh && powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/tests/windows_preset_helper_contract.ps1"
 quick-test = "bash scripts/stages/test-lane.sh quick windows-ninja-msvc-release"
 integration-test = "bash scripts/stages/test-lane.sh integration windows-ninja-msvc-release"
 test = "bash scripts/stages/test-lane.sh default windows-ninja-msvc-release"
