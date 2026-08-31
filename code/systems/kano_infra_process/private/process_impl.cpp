@@ -153,6 +153,17 @@ static KanoProcess kano_process_alloc(const KanoProcessOptions* options) {
 
 #ifdef _WIN32
 
+static bool kano_process_is_cmd_payload(KanoProcess proc, size_t index) {
+    const char* previous;
+
+    if (!proc || index == 0 || !kano_process_is_cmd_executable(proc->executable)) {
+        return false;
+    }
+
+    previous = proc->args[index - 1];
+    return previous && (_stricmp(previous, "/c") == 0 || _stricmp(previous, "/k") == 0);
+}
+
 static size_t kano_process_windows_quote_capacity(const char* arg) {
     size_t len;
     if (!arg) return 3;
@@ -205,7 +216,9 @@ static char* kano_process_build_command_line(KanoProcess proc) {
     total += kano_process_windows_quote_capacity(proc->executable);
     for (i = 1; i < proc->arg_count; ++i) {
         total += 1;
-        if (kano_process_is_cmd_executable(proc->executable) && proc->args[i][0] == '/') {
+        if (kano_process_is_cmd_payload(proc, i)) {
+            total += strlen(proc->args[i]) + 2;
+        } else if (kano_process_is_cmd_executable(proc->executable) && proc->args[i][0] == '/') {
             total += strlen(proc->args[i]);
         } else {
             total += kano_process_windows_quote_capacity(proc->args[i]);
@@ -219,7 +232,15 @@ static char* kano_process_build_command_line(KanoProcess proc) {
     out = kano_process_append_windows_quoted_arg(out, proc->executable);
 
     for (i = 1; i < proc->arg_count; ++i) {
+        const size_t len = strlen(proc->args[i]);
         *out++ = ' ';
+        if (kano_process_is_cmd_payload(proc, i)) {
+            *out++ = '"';
+            memcpy(out, proc->args[i], len);
+            out += len;
+            *out++ = '"';
+            continue;
+        }
 #ifdef _WIN32
         if (kano_process_is_cmd_executable(proc->executable) && proc->args[i][0] == '/') {
             memcpy(out, proc->args[i], strlen(proc->args[i]));
