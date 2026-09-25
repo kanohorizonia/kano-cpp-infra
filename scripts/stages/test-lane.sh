@@ -66,6 +66,15 @@ case "$LANE" in
     ;;
 esac
 
+# The DSH harness refuses writes to %TEMP%. Route sandbox fixtures
+# through the workspace .kano/tmp area so existing functional tests
+# remain exercisable. Hosts that prefer the system temp can still
+# override KOG_TEST_SANDBOX_ROOT before invoking the lane.
+if [ -z "${KOG_TEST_SANDBOX_ROOT:-}" ]; then
+    export KOG_TEST_SANDBOX_ROOT="$CPP_ROOT/.kano/tmp/kog-functional-sandbox"
+fi
+mkdir -p "$KOG_TEST_SANDBOX_ROOT"
+
 export KANO_CPP_INFRA_REPO_ROOT="$REPO_ROOT"
 export KANO_CPP_INFRA_CPP_ROOT="$CPP_ROOT"
 export KANO_REPORT_ROOT="$REPORT_ROOT"
