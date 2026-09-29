@@ -54,6 +54,7 @@ typedef struct KanoProcessResultV2 {
     size_t stderr_size;  /* retained byte count, excluding sentinel NUL */
     bool stderr_truncated;
     bool timed_out;
+    bool cancelled;
 } KanoProcessResultV2;
 
 typedef enum KanoProcessMode {
@@ -78,6 +79,14 @@ typedef void (*KanoProcessOutputCallback)(
     void* user_data
 );
 
+/*
+ * Optional cooperative cancellation observer. The wait implementation polls
+ * this callback after checking for process completion and before checking the
+ * timeout deadline. It must return promptly and must not call back into the
+ * same KanoProcess handle.
+ */
+typedef bool (*KanoProcessCancellationObserver)(void* user_data);
+
 typedef struct KanoProcessOptions {
     const char* executable;
     const char* working_dir;
@@ -87,6 +96,8 @@ typedef struct KanoProcessOptions {
     int timeout_ms;
     KanoProcessOutputCallback output_callback;
     void* user_data;
+    KanoProcessCancellationObserver cancellation_observer;
+    void* cancellation_user_data;
 } KanoProcessOptions;
 
 /* ---------------------------------------------------------------------------
