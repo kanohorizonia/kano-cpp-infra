@@ -3,6 +3,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/../lib/native_tool.sh"
+kano_cpp_infra_watchdog_enter "$0" "$@"
+
 . "$SCRIPT_DIR/../lib/matrix.sh"
 
 INFRA_SCRIPTS_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
@@ -41,6 +44,8 @@ if [[ -z "${INF_COVERAGE_ROOT:-}" ]]; then
     export INF_COVERAGE_ROOT="$KANO_COVERAGE_REPORTS_ROOT/$KANO_REPORT_SLUG"
   fi
 fi
+
+kano_cpp_infra_test_timeout_audit "$CPP_ROOT" "${KANO_TEST_CONFIG:-Release}"
 
 coverage_script="$(kano_cpp_infra_matrix_default_coverage_gather_script)"
 default_args=()

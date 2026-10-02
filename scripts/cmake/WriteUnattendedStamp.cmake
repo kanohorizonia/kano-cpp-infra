@@ -1,0 +1,5 @@
+if(NOT DEFINED KANO_UNATTENDED_BINARY OR NOT EXISTS "${KANO_UNATTENDED_BINARY}")
+    message(FATAL_ERROR "Unattended capability stamp requires the completed native binary")
+endif()
+file(SHA256 "${KANO_UNATTENDED_BINARY}" _kano_unattended_sha256)
+file(WRITE "${KANO_UNATTENDED_BINARY}.unattended-v1" "${_kano_unattended_sha256}\n")

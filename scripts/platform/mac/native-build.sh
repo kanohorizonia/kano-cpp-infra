@@ -16,6 +16,9 @@
 set -euo pipefail
 
 KANO_INFRA_MAC_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$KANO_INFRA_MAC_SCRIPT_DIR/../../lib/native_tool.sh"
+kano_cpp_infra_watchdog_enter "$0" "$@"
+
 export INF_CPP_ROOT="${INF_CPP_ROOT:-${KANO_CPP_ROOT:-$(cd "$KANO_INFRA_MAC_SCRIPT_DIR/../../../../.." && pwd)}}"
 
 # Source infra's generic unix preset runner (provides kano_cpp_run_unix_preset)

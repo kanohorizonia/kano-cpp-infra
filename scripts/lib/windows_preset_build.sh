@@ -2,6 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/native_tool.sh"
+if [[ -f "$0" ]]; then
+  kano_cpp_infra_watchdog_enter "$0" "$@"
+fi
+
 
 # Bootstrap pixi environment if not already active
 # Skip if global tools (cmake, ninja) are already available in PATH

@@ -16,6 +16,9 @@
 set -euo pipefail
 
 KANO_INFRA_LINUX_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$KANO_INFRA_LINUX_SCRIPT_DIR/../../lib/native_tool.sh"
+kano_cpp_infra_watchdog_enter "$0" "$@"
+
 if [[ -z "${KANO_CPP_ROOT:-${INF_CPP_ROOT:-${KOB_CPP_ROOT:-}}}" ]]; then
     export KANO_CPP_ROOT="$(cd "$KANO_INFRA_LINUX_SCRIPT_DIR/../.." && pwd)"
 fi

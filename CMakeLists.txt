@@ -4,6 +4,9 @@ project(kano-cpp-infra VERSION 1.1.0 LANGUAGES C CXX)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(FetchContent)
+include(scripts/cmake/KanoInfraUnattended.cmake)
+
+option(KANO_INFRA_BUILD_TESTS "Build unattended startup and process contracts" OFF)
 
 set(KANO_JSONCPP_SOURCE_MODE "fetch" CACHE STRING "jsoncpp source mode: fetch|system")
 set_property(CACHE KANO_JSONCPP_SOURCE_MODE PROPERTY STRINGS fetch system)
@@ -69,7 +72,11 @@ target_link_libraries(kano_infra_all INTERFACE
 )
 add_library(KanoInfra::All ALIAS kano_infra_all)
 
-install(DIRECTORY code/systems/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY code/systems/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
+    PATTERN "kano_infra_unattended" EXCLUDE)
+install(FILES code/systems/kano_infra_unattended/public/kano_unattended.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 install(TARGETS
     kano_infra_config
@@ -80,6 +87,7 @@ install(TARGETS
     kano_infra_self
     kano_infra_timing
     kano_infra_all
+    kano_infra_unattended
     EXPORT KanoInfraTargets
 )
 
@@ -104,7 +112,14 @@ write_basic_package_version_file(
 install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/KanoInfraConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/KanoInfraConfigVersion.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/cmake/KanoInfraUnattended.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/KanoInfra"
 )
 
 set(KANO_INFRA_VERSION "${PROJECT_VERSION}")
+
+if(KANO_INFRA_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(code/tests)
+    kano_infra_finalize_test_timeouts(30)
+endif()

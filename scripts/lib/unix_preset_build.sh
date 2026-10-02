@@ -3,6 +3,9 @@ set -euo pipefail
 
 KANO_INFRA_UNIX_PRESET_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$KANO_INFRA_UNIX_PRESET_SCRIPT_DIR/native_tool.sh"
+if [[ -f "$0" ]]; then
+  kano_cpp_infra_watchdog_enter "$0" "$@"
+fi
 
 # Bootstrap pixi environment if not already active.
 # shellcheck source=/dev/null

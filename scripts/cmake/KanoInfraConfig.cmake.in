@@ -1,2 +1,26 @@
-# INCLUDE(.cmake.in)
-# Template for @CONFIG_INCLUDE@ — not used directly; see KanoInfraConfig.cmake
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/KanoInfraTargets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/KanoInfraUnattended.cmake")
+
+# Preserve source-tree names with imported interfaces supported by CMake 3.16.
+# The unattended target exports its public name directly.
+foreach(_module config build_info platform process diagnostics self timing)
+    if(TARGET "KanoInfra::kano_infra_${_module}" AND NOT TARGET "KanoInfra::${_module}")
+        add_library("KanoInfra::${_module}" INTERFACE IMPORTED)
+        set_property(TARGET "KanoInfra::${_module}" PROPERTY
+            INTERFACE_LINK_LIBRARIES "KanoInfra::kano_infra_${_module}")
+    endif()
+    if(TARGET "KanoInfra::${_module}")
+        set("KanoInfra_${_module}_FOUND" TRUE)
+    endif()
+endforeach()
+if(TARGET KanoInfra::kano_infra_all AND NOT TARGET KanoInfra::All)
+    add_library(KanoInfra::All INTERFACE IMPORTED)
+    set_property(TARGET KanoInfra::All PROPERTY
+        INTERFACE_LINK_LIBRARIES KanoInfra::kano_infra_all)
+endif()
+set(KanoInfra_All_FOUND TRUE)
+set(KanoInfra_unattended_FOUND TRUE)
+
+check_required_components(KanoInfra)
