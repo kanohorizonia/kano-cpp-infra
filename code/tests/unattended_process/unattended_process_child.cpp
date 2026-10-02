@@ -1,3 +1,4 @@
+#include <kano_unattended.hpp>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -47,6 +48,7 @@ static long Spawn(const char* executable, const char* mode, bool inherit_capture
 }
 
 int main(int argc, char** argv) {
+    kano::infra::ConfigureUnattendedExecution();
     const char* mode = argc > 1 ? argv[1] : "binary";
 #ifdef _WIN32
     const long pid = (long)GetCurrentProcessId();

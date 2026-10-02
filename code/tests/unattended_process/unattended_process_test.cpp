@@ -1,4 +1,5 @@
 #include <kano_process.h>
+#include <kano_unattended.hpp>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -93,6 +94,7 @@ static size_t CheckCapturedProcessesStopped(const KanoUnattendedProcessResult& r
 }
 
 int main() {
+    kano::infra::ConfigureUnattendedExecution();
     KanoUnattendedProcessResult result{};
     KanoUnattendedProcessOptions invalid{};
     Check(!kano_process_run_unattended(&invalid, &result), "empty options rejected");
