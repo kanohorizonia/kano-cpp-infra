@@ -52,6 +52,23 @@ kano_cpp_infra_watchdog_enter() {
       return 2
     fi
   done
+  local bash_bin="${BASH:-}"
+  if [[ ! -f "$bash_bin" || ! -x "$bash_bin" ]]; then
+    echo "The current Bash executable is unavailable for unattended re-entry." >&2
+    return 127
+  fi
+  case "$(uname -s 2>/dev/null || true)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if ! command -v cygpath >/dev/null 2>&1; then
+        echo "Native Windows Bash re-entry requires cygpath from the supported Bash installation." >&2
+        return 127
+      fi
+      if ! bash_bin="$(cygpath -aw "$bash_bin")"; then
+        echo "The current Bash executable could not be resolved for native Windows re-entry." >&2
+        return 127
+      fi
+      ;;
+  esac
   kano_cpp_infra_prepare_unattended_temp
   export KANO_UNATTENDED=1 KANO_UNATTENDED_WATCHDOG_ACTIVE=1
   local tool=""
@@ -68,7 +85,7 @@ kano_cpp_infra_watchdog_enter() {
       fi
     fi
     if [[ "$expected_hash" =~ ^[a-fA-F0-9]{64}$ && "$expected_hash" == "$actual_hash" ]]; then
-      exec "$tool" watchdog --timeout-ms "$timeout_ms" --cleanup-timeout-ms "$cleanup_ms" -- bash "$script" "$@"
+      exec "$tool" watchdog --timeout-ms "$timeout_ms" --cleanup-timeout-ms "$cleanup_ms" -- "$bash_bin" "$script" "$@"
     fi
   fi
   # Building the watchdog itself must not recursively require its own binary.
@@ -85,7 +102,7 @@ kano_cpp_infra_watchdog_enter() {
     echo "A strict native watchdog was not found and bounded bootstrap is unavailable. Set KANO_CPP_INFRA_TOOL to a built watchdog, or provide an existing Python 3 interpreter." >&2
     return 127
   fi
-  exec "$python_bin" "$KANO_CPP_INFRA_NATIVE_TOOL_LIB_DIR/watchdog-bootstrap.py" --timeout-ms "$timeout_ms" --cleanup-timeout-ms "$cleanup_ms" -- bash "$script" "$@"
+  exec "$python_bin" "$KANO_CPP_INFRA_NATIVE_TOOL_LIB_DIR/watchdog-bootstrap.py" --timeout-ms "$timeout_ms" --cleanup-timeout-ms "$cleanup_ms" -- "$bash_bin" "$script" "$@"
 }
 
 kano_cpp_infra_resolve_native_tool() {
