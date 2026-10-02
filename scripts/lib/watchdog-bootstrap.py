@@ -17,6 +17,44 @@ import time
 CAPTURE_LIMIT = 1048576
 
 
+def windows_quoted_arg(argument):
+    parts = ['"']
+    backslashes = 0
+    for character in argument:
+        if character == "\\":
+            backslashes += 1
+            continue
+        if character == '"':
+            parts.append("\\" * (backslashes * 2 + 1))
+        else:
+            parts.append("\\" * backslashes)
+        parts.append(character)
+        backslashes = 0
+    parts.append("\\" * (backslashes * 2))
+    parts.append('"')
+    return "".join(parts)
+
+
+def windows_command_line(arguments):
+    """Use the native runner's argv quoting and existing cmd payload policy.
+
+    MSYS needs outer quotes even for quote-bearing args without whitespace.
+    cmd switches and the /c or /k payload retain the native facade's special
+    handling; ordinary args double backslashes before quotes and at the end.
+    """
+    executable = arguments[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    is_cmd = executable in ("cmd", "cmd.exe")
+    quoted = [windows_quoted_arg(arguments[0])]
+    for index, argument in enumerate(arguments[1:], start=1):
+        if is_cmd and arguments[index - 1].lower() in ("/c", "/k"):
+            quoted.append('"' + argument + '"')
+        elif is_cmd and argument.startswith("/"):
+            quoted.append(argument)
+        else:
+            quoted.append(windows_quoted_arg(argument))
+    return " ".join(quoted)
+
+
 def retain(buffers, stream, data):
     buffer = buffers[stream]
     remaining = max(0, CAPTURE_LIMIT - len(buffer))
@@ -217,7 +255,7 @@ def run_windows(command, timeout, cleanup, buffers):
         executable = shutil.which(command[0])
         if executable is None:
             raise RuntimeError("bootstrap executable was not found")
-        command_line = ctypes.create_unicode_buffer(subprocess.list2cmdline([executable] + command[1:]))
+        command_line = ctypes.create_unicode_buffer(windows_command_line([executable] + command[1:]))
         checked(create_process(executable, command_line, None, None, True, 0x4 | 0x08000000,
                                None, None, ctypes.byref(startup), ctypes.byref(info)))
         checked(assign_job(job, info.process))
