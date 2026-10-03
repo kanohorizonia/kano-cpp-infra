@@ -3,6 +3,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/../lib/native_tool.sh"
+kano_cpp_infra_watchdog_enter "$0" "$@"
+
 . "$SCRIPT_DIR/../lib/matrix.sh"
 
 report_script="$(kano_cpp_infra_matrix_default_test_report_script)"
@@ -96,6 +99,8 @@ export KANO_BDD_METADATA_DIR="$(resolve_repo_path "${KANO_BDD_METADATA_DIR:-$KAN
 export KANO_TEST_COMMAND="${KANO_TEST_COMMAND:-bash \"$CPP_ROOT/code/tests/run_tests.sh\" \"$DETECTED_PRESET\" \"$REPORT_CONFIG\" \"$REPORT_LANE\"}"
 export KANO_CTEST_OUTPUT_SIZE_PASSED="${KANO_CTEST_OUTPUT_SIZE_PASSED:-262144}"
 export KANO_CTEST_OUTPUT_SIZE_FAILED="${KANO_CTEST_OUTPUT_SIZE_FAILED:-1048576}"
+
+kano_cpp_infra_test_timeout_audit "$CPP_ROOT" "${REPORT_CONFIG}"
 
 mkdir -p "$KANO_REPORT_ROOT/raw" "$KANO_BDD_METADATA_DIR"
 suite_map_src="${KANO_TEST_SUITE_MAP_SRC:-}"

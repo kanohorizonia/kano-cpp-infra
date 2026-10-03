@@ -4,6 +4,107 @@ set -euo pipefail
 KANO_CPP_INFRA_NATIVE_TOOL_LIB_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 KANO_CPP_INFRA_NATIVE_TOOL_CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-${KANO_CPP_ROOT:-$(cd -- "$KANO_CPP_INFRA_NATIVE_TOOL_LIB_DIR/../../../.." && pwd)}}"
 
+# Re-enter one canonical command under an owned native process tree. Nested
+# stages inherit the marker, preserving one deadline for the entire workflow.
+kano_cpp_infra_prepare_unattended_temp() {
+  local run_dir="${KANO_UNATTENDED_TEMP_DIR:-}"
+  if [[ -n "$run_dir" ]]; then
+    if command -v cygpath >/dev/null 2>&1; then
+      run_dir="$(cygpath -u "$run_dir")"
+    fi
+    [[ -d "$run_dir" ]] || { echo "Inherited unattended temp directory is unavailable." >&2; return 1; }
+  else
+    local temp_root="${KANO_UNATTENDED_TEMP_ROOT:-$KANO_CPP_INFRA_NATIVE_TOOL_CPP_ROOT/out/tmp/unattended}"
+    if command -v cygpath >/dev/null 2>&1; then
+      temp_root="$(cygpath -u "$temp_root")"
+    fi
+    mkdir -p -- "$temp_root"
+    run_dir="$(mktemp -d "$temp_root/job.XXXXXXXXXX")"
+  fi
+  export TMPDIR="$run_dir"
+  local native_dir="$run_dir"
+  case "$(uname -s 2>/dev/null || true)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if ! command -v cygpath >/dev/null 2>&1; then
+        echo "Native Windows temp routing requires cygpath from the supported Bash installation." >&2
+        return 127
+      fi
+      native_dir="$(cygpath -aw "$run_dir")"
+      ;;
+  esac
+  export TEMP="$native_dir" TMP="$native_dir" KANO_UNATTENDED_TEMP_DIR="$native_dir"
+}
+
+kano_cpp_infra_watchdog_enter() {
+  local unattended_mode="${KANO_UNATTENDED:-}"
+  case "$unattended_mode" in
+    0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff]) return 0 ;; # Explicit human debugging mode.
+  esac
+  [[ "${KANO_UNATTENDED_WATCHDOG_ACTIVE:-}" == "1" ]] && return 0
+  local script="${1:?watchdog requires a script path}"
+  shift
+  local timeout_ms="${KANO_UNATTENDED_TIMEOUT_MS:-900000}"
+  local cleanup_ms="${KANO_UNATTENDED_CLEANUP_TIMEOUT_MS:-5000}"
+  local value
+  for value in "$timeout_ms" "$cleanup_ms"; do
+    if [[ ! "$value" =~ ^[0-9]+$ || "$value" =~ ^0+$ || ${#value} -gt 10 || ( ${#value} -eq 10 && "$value" > "2147483647" ) ]]; then
+      echo "Unattended deadlines must be positive integers no greater than 2147483647 milliseconds." >&2
+      return 2
+    fi
+  done
+  local bash_bin="${BASH:-}"
+  if [[ ! -f "$bash_bin" || ! -x "$bash_bin" ]]; then
+    echo "The current Bash executable is unavailable for unattended re-entry." >&2
+    return 127
+  fi
+  case "$(uname -s 2>/dev/null || true)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if ! command -v cygpath >/dev/null 2>&1; then
+        echo "Native Windows Bash re-entry requires cygpath from the supported Bash installation." >&2
+        return 127
+      fi
+      if ! bash_bin="$(cygpath -aw "$bash_bin")"; then
+        echo "The current Bash executable could not be resolved for native Windows re-entry." >&2
+        return 127
+      fi
+      ;;
+  esac
+  kano_cpp_infra_prepare_unattended_temp
+  export KANO_UNATTENDED=1 KANO_UNATTENDED_WATCHDOG_ACTIVE=1
+  local tool=""
+  if tool="$(kano_cpp_infra_resolve_native_tool 2>/dev/null)"; then
+    local expected_hash="" actual_hash=""
+    if [[ -f "$tool.unattended-v1" ]]; then
+      IFS= read -r expected_hash < "$tool.unattended-v1" || true
+      expected_hash="${expected_hash%$'\r'}"
+      expected_hash="$(printf '%s' "$expected_hash" | tr 'A-F' 'a-f')"
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual_hash="$(sha256sum "$tool" | cut -d ' ' -f 1)"
+      elif command -v shasum >/dev/null 2>&1; then
+        actual_hash="$(shasum -a 256 "$tool" | cut -d ' ' -f 1)"
+      fi
+    fi
+    if [[ "$expected_hash" =~ ^[a-fA-F0-9]{64}$ && "$expected_hash" == "$actual_hash" ]]; then
+      exec "$tool" watchdog --timeout-ms "$timeout_ms" --cleanup-timeout-ms "$cleanup_ms" -- "$bash_bin" "$script" "$@"
+    fi
+  fi
+  # Building the watchdog itself must not recursively require its own binary.
+  # An existing Python interpreter supplies the OS-contained bootstrap only;
+  # never install it or fall back to an uncovered command.
+  local python_bin="" candidate
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 && [[ "$(command -v "$candidate")" != *WindowsApps* ]]; then
+      python_bin="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$python_bin" ]]; then
+    echo "A strict native watchdog was not found and bounded bootstrap is unavailable. Set KANO_CPP_INFRA_TOOL to a built watchdog, or provide an existing Python 3 interpreter." >&2
+    return 127
+  fi
+  exec "$python_bin" "$KANO_CPP_INFRA_NATIVE_TOOL_LIB_DIR/watchdog-bootstrap.py" --timeout-ms "$timeout_ms" --cleanup-timeout-ms "$cleanup_ms" -- "$bash_bin" "$script" "$@"
+}
+
 kano_cpp_infra_resolve_native_tool() {
   local exe_suffix=""
   local candidate=""
@@ -302,6 +403,18 @@ kano_cpp_infra_tool_bootstrap_fallback() {
       return 127
       ;;
   esac
+}
+
+# Audit evaluated CTest metadata where configured builds exist. Direct binary
+# lanes still receive the outer whole-job watchdog independently of CTest.
+kano_cpp_infra_test_timeout_audit() {
+  local cpp_root="${1:?CTest audit requires C++ root}"
+  local config="${2:-Release}"
+  local build_dir
+  for build_dir in "$cpp_root"/out/obj/* "$cpp_root"/build "$cpp_root"/build/*; do
+    [[ -f "$build_dir/CTestTestfile.cmake" ]] || continue
+    kano_cpp_infra_tool test-timeouts --build-dir "$build_dir" --config "$config" || return $?
+  done
 }
 
 kano_cpp_infra_tool() {

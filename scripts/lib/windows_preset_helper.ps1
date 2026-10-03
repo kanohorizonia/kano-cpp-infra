@@ -968,7 +968,7 @@ switch ($Action) {
   }
   "test-path" {
     if ([string]::IsNullOrWhiteSpace($Path)) { exit 1 }
-    $exists = Kano-TestPath -LiteralPath $Path
+    $exists = Kano-TestPath -Path $Path
     if ($exists) { exit 0 } else { exit 1 }
   }
   "run-preset" {

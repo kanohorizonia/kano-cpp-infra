@@ -1,6 +1,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cmath>
+#include <chrono>
+#include <limits>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -14,44 +17,20 @@
 #include <vector>
 
 #ifdef _WIN32
-#include <crtdbg.h>
 #include <windows.h>
 #endif
 
 #include <json/json.h>
 
 #include "kano_process.h"
+#include "kano_unattended.hpp"
 
 namespace fs = std::filesystem;
 
 namespace {
 
-void ConfigureNoninteractiveErrorHandling() {
-#ifdef _WIN32
-    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
-    SetThreadErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX, nullptr);
+int PositiveMilliseconds(const std::string& Value, const char* Name);
 
-    SetUnhandledExceptionFilter([](EXCEPTION_POINTERS*) -> LONG {
-        std::fputs("Fatal native exception.\n", stderr);
-        std::fflush(stderr);
-        return EXCEPTION_EXECUTE_HANDLER;
-    });
-
-    _set_error_mode(_OUT_TO_STDERR);
-    _set_invalid_parameter_handler(
-        [](const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, uintptr_t) {});
-    _set_thread_local_invalid_parameter_handler(
-        [](const wchar_t*, const wchar_t*, const wchar_t*, unsigned int, uintptr_t) {});
-    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
-
-    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDERR);
-    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
-    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
-    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
-#endif
-}
 
 struct TestSuite {
     std::string Name = "unnamed";
@@ -457,6 +436,40 @@ struct EnvRestore {
 std::string Lower(std::string Value) {
     std::transform(Value.begin(), Value.end(), Value.begin(), [](unsigned char Ch) { return static_cast<char>(std::tolower(Ch)); });
     return Value;
+}
+
+void ConfigureUnattendedTempEnvironment(EnvRestore& Environment, const fs::path& DefaultRoot) {
+    const std::string RequestedMode = Lower(GetEnvString("KANO_UNATTENDED"));
+    if (RequestedMode == "0" || RequestedMode == "false" || RequestedMode == "no" || RequestedMode == "off") {
+        return;
+    }
+    fs::path RunDirectory = GetEnvString("KANO_UNATTENDED_TEMP_DIR");
+    if (!RunDirectory.empty()) {
+        if (!fs::is_directory(RunDirectory)) {
+            throw std::runtime_error("inherited unattended temp directory is unavailable");
+        }
+    } else {
+        const std::string OverrideRoot = GetEnvString("KANO_UNATTENDED_TEMP_ROOT");
+        const fs::path TempRoot = fs::absolute(OverrideRoot.empty()
+            ? DefaultRoot / "out/tmp/unattended" : fs::path(OverrideRoot));
+        fs::create_directories(TempRoot);
+        const auto RunId = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (int Attempt = 0; Attempt < 16; ++Attempt) {
+            const fs::path Candidate = TempRoot / ("job-" + std::to_string(RunId) + "-" + std::to_string(Attempt));
+            if (fs::create_directory(Candidate)) {
+                RunDirectory = Candidate;
+                break;
+            }
+        }
+        if (RunDirectory.empty()) {
+            throw std::runtime_error("failed to allocate an owned unattended temp directory");
+        }
+    }
+    const std::string NativeDirectory = fs::absolute(RunDirectory).string();
+    Environment.Set("TEMP", NativeDirectory);
+    Environment.Set("TMP", NativeDirectory);
+    Environment.Set("TMPDIR", NativeDirectory);
+    Environment.Set("KANO_UNATTENDED_TEMP_DIR", NativeDirectory);
 }
 
 std::vector<std::string> SplitCsv(const std::string& Value) {
@@ -1745,10 +1758,20 @@ int CommandRunProfileMatrix(const std::vector<std::string>& Args) {
         std::cerr << "usage: run-profile-matrix <matrix.json> <tmp-root> <repo-root> <cpp-root>\n";
         return 2;
     }
+    const auto Started = std::chrono::steady_clock::now();
+    const std::string Timeout = GetEnvString("KANO_UNATTENDED_TIMEOUT_MS");
+    const std::string CleanupTimeout = GetEnvString("KANO_UNATTENDED_CLEANUP_TIMEOUT_MS");
+    const int TimeoutMs = PositiveMilliseconds(Timeout.empty() ? "900000" : Timeout, "KANO_UNATTENDED_TIMEOUT_MS");
+    const int CleanupTimeoutMs = PositiveMilliseconds(CleanupTimeout.empty() ? "5000" : CleanupTimeout, "KANO_UNATTENDED_CLEANUP_TIMEOUT_MS");
+    const auto Deadline = Started + std::chrono::milliseconds(TimeoutMs);
+    bool AllSucceeded = true;
+    bool DeadlineExceeded = false;
     const fs::path MatrixPath = Args[0];
     const fs::path TmpRoot = Args[1];
     const fs::path RepoRoot = Args[2];
     const fs::path CppRoot = Args[3];
+    EnvRestore JobEnvironment;
+    ConfigureUnattendedTempEnvironment(JobEnvironment, CppRoot);
     const Json::Value Matrix = ParseJsonFile(MatrixPath);
     const Json::Value Defaults = Matrix["defaults"];
     const std::string MatrixName = GetString(Matrix, "name", MatrixPath.stem().string());
@@ -1758,6 +1781,12 @@ int CommandRunProfileMatrix(const std::vector<std::string>& Args) {
 
     Json::Value Results(Json::arrayValue);
     for (const Json::Value& Case : Matrix["cases"]) {
+        if (std::chrono::steady_clock::now() >= Deadline) {
+            AllSucceeded = false;
+            DeadlineExceeded = true;
+            std::cerr << "[profile-matrix] whole-job deadline exhausted; remaining cases were not launched\n";
+            break;
+        }
         const std::string CaseId = Case["id"].asString();
         const fs::path CaseRoot = MatrixRoot / CaseId;
         fs::create_directories(CaseRoot);
@@ -1828,41 +1857,47 @@ int CommandRunProfileMatrix(const std::vector<std::string>& Args) {
                 "--output", OutputCsv.string(),
             };
         }
-        std::vector<std::string> ProcessArgs;
-#ifdef _WIN32
-        ProcessArgs.push_back("bash");
-#endif
-        ProcessArgs.insert(ProcessArgs.end(), CommandArgs.begin(), CommandArgs.end());
         std::vector<const char*> Argv;
-        for (const std::string& Arg : ProcessArgs) {
+        for (const std::string& Arg : CommandArgs) {
             Argv.push_back(Arg.c_str());
         }
-        KanoProcessOptions Options{};
+        KanoUnattendedProcessOptions Options{};
         const std::string RepoRootString = RepoRoot.string();
         Options.executable = "bash";
         Options.working_dir = RepoRootString.c_str();
         Options.argv = Argv.data();
         Options.argv_count = Argv.size();
         Options.mode = KANO_PROCESS_MODE_CAPTURE;
-        KanoProcessCaptureLimitsV2 CaptureLimits{};
-        KanoProcessResultV2 ProcResult{};
-        const bool bRan = kano_process_run_ex_v2(&Options, &CaptureLimits, &ProcResult);
-        const int ExitCode = bRan ? ProcResult.exit_code : 127;
-        WriteText(
-            CaseRoot / "stdout.log",
-            ProcResult.stdout_data
-                ? std::string(
-                      ProcResult.stdout_data,
-                      ProcResult.stdout_size)
-                : "");
-        WriteText(
-            CaseRoot / "stderr.log",
-            ProcResult.stderr_data
-                ? std::string(
-                      ProcResult.stderr_data,
-                      ProcResult.stderr_size)
-                : (bRan ? "" : "failed to spawn process\n"));
-        kano_process_free_result_v2(&ProcResult);
+        const auto RemainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(Deadline - std::chrono::steady_clock::now()).count();
+        if (RemainingMs <= 0) {
+            AllSucceeded = false;
+            DeadlineExceeded = true;
+            std::cerr << "[profile-matrix] whole-job deadline exhausted before case launch\n";
+            break;
+        }
+        Options.timeout_ms = static_cast<int>(RemainingMs);
+        Options.cleanup_timeout_ms = CleanupTimeoutMs;
+        Options.capture_limits = {1048576, 1048576};
+        const std::string RequestedMode = Lower(GetEnvString("KANO_UNATTENDED"));
+        if (RequestedMode != "0" && RequestedMode != "false" && RequestedMode != "no" && RequestedMode != "off") {
+            Env.Set("KANO_UNATTENDED", "1");
+        }
+        Env.Set("KANO_UNATTENDED_WATCHDOG_ACTIVE", "1");
+        KanoUnattendedProcessResult ProcResult{};
+        const bool bRan = kano_process_run_unattended(&Options, &ProcResult);
+        const int ExitCode = bRan && ProcResult.cleanup_complete ? ProcResult.process.exit_code : 125;
+        WriteText(CaseRoot / "stdout.log", ProcResult.process.stdout_data
+            ? std::string(ProcResult.process.stdout_data, ProcResult.process.stdout_size) : "");
+        WriteText(CaseRoot / "stderr.log", ProcResult.process.stderr_data
+            ? std::string(ProcResult.process.stderr_data, ProcResult.process.stderr_size) : "");
+        AllSucceeded = AllSucceeded && ExitCode == 0;
+        DeadlineExceeded = DeadlineExceeded || ProcResult.status == KANO_UNATTENDED_PROCESS_TIMED_OUT;
+        Result["watchdogStatus"] = static_cast<int>(ProcResult.status);
+        Result["cleanupComplete"] = ProcResult.cleanup_complete;
+        Result["elapsedMs"] = static_cast<Json::Int64>(ProcResult.elapsed_ms);
+        Result["stdoutTruncated"] = ProcResult.process.stdout_truncated;
+        Result["stderrTruncated"] = ProcResult.process.stderr_truncated;
+        kano_process_free_unattended_result(&ProcResult);
 
         Result["exitCode"] = ExitCode;
         Result["status"] = ExitCode == 0 ? "passed" : "failed";
@@ -1880,10 +1915,12 @@ int CommandRunProfileMatrix(const std::vector<std::string>& Args) {
     Summary["hostOs"] = HostOs();
     Summary["hostArch"] = HostArch();
     Summary["cases"] = Results;
+    Summary["deadlineExceeded"] = DeadlineExceeded;
+    Summary["timeoutMs"] = TimeoutMs;
     const fs::path ProfilePath = MatrixRoot / "profile.json";
     WriteText(ProfilePath, WriteJsonString(Summary) + "\n");
     std::cout << ProfilePath.string() << "\n";
-    return 0;
+    return AllSucceeded ? 0 : (DeadlineExceeded ? 124 : 1);
 }
 
 int CommandRenderProfileReport(const std::vector<std::string>& Args) {
@@ -2012,10 +2049,174 @@ int CommandRewriteExportManifests(const std::vector<std::string>& Args) {
     return 0;
 }
 
+int PositiveMilliseconds(const std::string& Value, const char* Name) {
+    if (Value.empty() || Value.find_first_not_of("0123456789") != std::string::npos) {
+        throw std::runtime_error(std::string(Name) + " must be a positive integer");
+    }
+    const unsigned long long Parsed = std::stoull(Value);
+    if (Parsed == 0 || Parsed > static_cast<unsigned long long>(std::numeric_limits<int>::max())) {
+        throw std::runtime_error(std::string(Name) + " is outside the positive millisecond range");
+    }
+    return static_cast<int>(Parsed);
+}
+
+const char* UnattendedStatusName(KanoUnattendedProcessStatus Status) {
+    switch (Status) {
+    case KANO_UNATTENDED_PROCESS_COMPLETED: return "completed";
+    case KANO_UNATTENDED_PROCESS_INVALID_OPTIONS: return "invalid-options";
+    case KANO_UNATTENDED_PROCESS_LAUNCH_FAILED: return "launch-failed";
+    case KANO_UNATTENDED_PROCESS_CONTAINMENT_FAILED: return "containment-failed";
+    case KANO_UNATTENDED_PROCESS_TIMED_OUT: return "timed-out";
+    case KANO_UNATTENDED_PROCESS_CAPTURE_FAILED: return "capture-failed";
+    case KANO_UNATTENDED_PROCESS_CLEANUP_FAILED: return "cleanup-failed";
+    }
+    return "unknown";
+}
+
+void PrintWatchdogDiagnostic(const KanoUnattendedProcessResult& Result) {
+    std::cerr << "[watchdog] status=" << UnattendedStatusName(Result.status)
+              << " containment=" << static_cast<int>(Result.containment)
+              << " cleanup=" << (Result.cleanup_complete ? "complete" : "incomplete")
+              << " elapsed-ms=" << Result.elapsed_ms
+              << " system-error=" << Result.system_error
+              << " exit-code=" << Result.process.exit_code << '\n';
+    if (Result.process.stdout_truncated || Result.process.stderr_truncated) {
+        std::cerr << "[watchdog] retained output was truncated at the configured capture bound\n";
+    }
+}
+
+int UnattendedExitCode(bool Ran, const KanoUnattendedProcessResult& Result) {
+    if (!Ran || !Result.cleanup_complete) {
+        return Result.status == KANO_UNATTENDED_PROCESS_TIMED_OUT ? 124 : 125;
+    }
+    return Result.process.exit_code;
+}
+
+int CommandWatchdog(const std::vector<std::string>& Args) {
+    if (Args == std::vector<std::string>{"--capabilities"}) {
+        std::cout << "strict-unattended-v1\n";
+        return 0;
+    }
+    int TimeoutMs = 0;
+    int CleanupTimeoutMs = 0;
+    std::size_t Index = 0;
+    for (; Index < Args.size() && Args[Index] != "--"; ++Index) {
+        const std::string& Name = Args[Index];
+        if ((Name != "--timeout-ms" && Name != "--cleanup-timeout-ms") || Index + 1 >= Args.size()) {
+            throw std::runtime_error("usage: watchdog --timeout-ms N --cleanup-timeout-ms N -- executable [args]");
+        }
+        const int Value = PositiveMilliseconds(Args[++Index], Name.c_str());
+        if (Name == "--timeout-ms") TimeoutMs = Value;
+        else CleanupTimeoutMs = Value;
+    }
+    if (TimeoutMs == 0 || CleanupTimeoutMs == 0 || Index + 1 >= Args.size()) {
+        throw std::runtime_error("watchdog requires positive deadlines and an executable after --");
+    }
+    const std::string& Executable = Args[++Index];
+    std::vector<const char*> Argv;
+    for (++Index; Index < Args.size(); ++Index) Argv.push_back(Args[Index].c_str());
+    KanoUnattendedProcessOptions Options{};
+    Options.executable = Executable.c_str();
+    Options.argv = Argv.data();
+    Options.argv_count = Argv.size();
+    Options.mode = KANO_PROCESS_MODE_CAPTURE;
+    Options.timeout_ms = TimeoutMs;
+    Options.cleanup_timeout_ms = CleanupTimeoutMs;
+    Options.capture_limits = {1048576, 1048576};
+    KanoUnattendedProcessResult Result{};
+    EnvRestore Environment;
+    const std::string CppRoot = GetEnvString("KANO_CPP_INFRA_CPP_ROOT").empty()
+        ? GetEnvString("KANO_CPP_ROOT") : GetEnvString("KANO_CPP_INFRA_CPP_ROOT");
+    ConfigureUnattendedTempEnvironment(Environment, CppRoot.empty() ? fs::current_path() : fs::path(CppRoot));
+    const std::string RequestedMode = Lower(GetEnvString("KANO_UNATTENDED"));
+    if (RequestedMode != "0" && RequestedMode != "false" && RequestedMode != "no" && RequestedMode != "off") {
+        Environment.Set("KANO_UNATTENDED", "1");
+    }
+    Environment.Set("KANO_UNATTENDED_WATCHDOG_ACTIVE", "1");
+    const bool Ran = kano_process_run_unattended(&Options, &Result);
+    if (Result.process.stdout_data) std::cout.write(Result.process.stdout_data, Result.process.stdout_size);
+    if (Result.process.stderr_data) std::cerr.write(Result.process.stderr_data, Result.process.stderr_size);
+    PrintWatchdogDiagnostic(Result);
+    const int ExitCode = UnattendedExitCode(Ran, Result);
+    kano_process_free_unattended_result(&Result);
+    return ExitCode;
+}
+
+int CommandTestTimeouts(const std::vector<std::string>& Args) {
+    std::string BuildDir;
+    std::string Config;
+    std::string JsonFile;
+    for (std::size_t Index = 0; Index < Args.size(); ++Index) {
+        const std::string& Name = Args[Index];
+        if ((Name != "--build-dir" && Name != "--config" && Name != "--json") || Index + 1 >= Args.size()) {
+            throw std::runtime_error("usage: test-timeouts --build-dir DIR [--config CONFIG] | --json evaluated-ctest.json");
+        }
+        const std::string& Value = Args[++Index];
+        if (Name == "--build-dir") BuildDir = Value;
+        else if (Name == "--config") Config = Value;
+        else JsonFile = Value;
+    }
+    Json::Value Root;
+    if (!JsonFile.empty() && BuildDir.empty() && Config.empty()) {
+        Root = ParseJsonFile(JsonFile);
+    } else if (!BuildDir.empty() && JsonFile.empty()) {
+        std::vector<std::string> Arguments = {"--test-dir", BuildDir, "--show-only=json-v1"};
+        if (!Config.empty()) Arguments.insert(Arguments.end(), {"-C", Config});
+        std::vector<const char*> Argv;
+        for (const auto& Arg : Arguments) Argv.push_back(Arg.c_str());
+        KanoUnattendedProcessOptions Options{};
+        Options.executable = "ctest";
+        Options.argv = Argv.data();
+        Options.argv_count = Argv.size();
+        Options.mode = KANO_PROCESS_MODE_CAPTURE;
+        Options.timeout_ms = 30000;
+        Options.cleanup_timeout_ms = 5000;
+        Options.capture_limits = {16777216, 1048576};
+        KanoUnattendedProcessResult Result{};
+        const bool Ran = kano_process_run_unattended(&Options, &Result);
+        const bool Complete = Ran && Result.cleanup_complete && Result.process.exit_code == 0 && !Result.process.stdout_truncated;
+        std::string Text = Result.process.stdout_data ? std::string(Result.process.stdout_data, Result.process.stdout_size) : "";
+        if (!Complete) {
+            if (Result.process.stderr_data) std::cerr.write(Result.process.stderr_data, Result.process.stderr_size);
+            PrintWatchdogDiagnostic(Result);
+            kano_process_free_unattended_result(&Result);
+            return 125;
+        }
+        kano_process_free_unattended_result(&Result);
+        Json::CharReaderBuilder Builder;
+        std::string Errors;
+        std::istringstream Input(Text);
+        if (!Json::parseFromStream(Builder, Input, &Root, &Errors)) {
+            throw std::runtime_error("failed to parse evaluated CTest JSON: " + Errors);
+        }
+    } else {
+        throw std::runtime_error("test-timeouts requires either --build-dir or --json");
+    }
+    if (!Root.isObject() || !Root["tests"].isArray()) {
+        throw std::runtime_error("evaluated CTest JSON has no tests array");
+    }
+    int Invalid = 0;
+    for (const auto& Test : Root["tests"]) {
+        bool HasPositiveTimeout = false;
+        for (const auto& Property : Test["properties"]) {
+            if (Property["name"].asString() == "TIMEOUT") {
+                const auto& Value = Property["value"];
+                HasPositiveTimeout = Value.isNumeric() && std::isfinite(Value.asDouble()) && Value.asDouble() > 0.0;
+            }
+        }
+        if (!HasPositiveTimeout) {
+            std::cerr << "[test-timeouts] missing, nonpositive, or nonfinite TIMEOUT: " << GetString(Test, "name", "unnamed") << '\n';
+            ++Invalid;
+        }
+    }
+    std::cerr << "[test-timeouts] evaluated=" << Root["tests"].size() << " invalid=" << Invalid << '\n';
+    return Invalid == 0 ? 0 : 1;
+}
+
 void PrintUsage() {
     std::cerr
         << "usage: kano-cpp-infra-tool <command> [args]\n"
-        << "commands: generate-bdd-metadata, render-junit-report, merge-junit-dir,\n"
+        << "commands: watchdog, test-timeouts, generate-bdd-metadata, render-junit-report, merge-junit-dir,\n"
         << "          gather-summary-junit, ctest-from-junit-dir, junit-html-fallback,\n"
         << "          reports-homepage, dump-cobertura-summary, count-nonempty-cobertura,\n"
         << "          cobertura-has-lines, cobertura-lines-valid, best-cobertura,\n"
@@ -2027,7 +2228,7 @@ void PrintUsage() {
 } // namespace
 
 int main(int argc, char** argv) {
-    ConfigureNoninteractiveErrorHandling();
+    kano::infra::ConfigureUnattendedExecution();
 
     if (argc < 2) {
         PrintUsage();
@@ -2039,6 +2240,8 @@ int main(int argc, char** argv) {
         Args.emplace_back(argv[Index]);
     }
     try {
+        if (Command == "watchdog") return CommandWatchdog(Args);
+        if (Command == "test-timeouts") return CommandTestTimeouts(Args);
         if (Command == "generate-bdd-metadata") return CommandGenerateBddMetadata(Args);
         if (Command == "render-junit-report") return CommandRenderJunitReport(Args);
         if (Command == "merge-junit-dir") return CommandMergeJunitDir(Args);

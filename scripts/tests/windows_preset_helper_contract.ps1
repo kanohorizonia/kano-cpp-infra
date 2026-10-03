@@ -1,4 +1,6 @@
 # KOG_CONTRACT_TEST: Windows preset helper contracts
+param([switch]$TestPathOnly)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -10,16 +12,42 @@ function Assert-Contract([bool]$Condition, [string]$Message) {
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..")).Path
 $helper = Join-Path $repoRoot "scripts\lib\windows_preset_helper.ps1"
-$testRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("kano-cpp-infra-windows-contract-" + [guid]::NewGuid().ToString("N"))
+$testRoot = Join-Path $repoRoot ("build\windows-preset-helper-contract-" + [guid]::NewGuid().ToString("N"))
 $substDrive = ""
 
 try {
+  [void](New-Item -ItemType Directory -Path $testRoot -Force)
+  $asciiSentinel = Join-Path $testRoot "existing-ascii.txt"
+  Set-Content -LiteralPath $asciiSentinel -Value "sentinel" -Encoding Ascii
+  $unicodeDirectory = Join-Path $testRoot ("path with spaces " + [char]0x8DEF + [char]0x5F84 + " [literal]")
+  [void](New-Item -ItemType Directory -Path $unicodeDirectory -Force)
+  $unicodeSentinel = Join-Path $unicodeDirectory "existing [literal].txt"
+  Set-Content -LiteralPath $unicodeSentinel -Value "sentinel" -Encoding Ascii
+  $powershellExecutable = (Get-Process -Id $PID).Path
+  $pathProbes = @(
+    @{ Path = $asciiSentinel; ExitCode = 0 },
+    @{ Path = (Join-Path $testRoot "missing-ascii.txt"); ExitCode = 1 },
+    @{ Path = $testRoot; ExitCode = 0 },
+    @{ Path = $unicodeSentinel; ExitCode = 0 },
+    @{ Path = (Join-Path $unicodeDirectory "missing [literal].txt"); ExitCode = 1 },
+    @{ Path = $unicodeDirectory; ExitCode = 0 }
+  )
+  foreach ($probe in $pathProbes) {
+    & $powershellExecutable -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+      -File $helper -Action test-path -Path $probe.Path | Out-Host
+    $probeExitCode = $LASTEXITCODE
+    Assert-Contract ($probeExitCode -eq $probe.ExitCode) `
+      ("test-path exit code mismatch: expected {0}, got {1}, path={2}" -f $probe.ExitCode, $probeExitCode, $probe.Path)
+  }
+  if ($TestPathOnly) {
+    Write-Host "PASS: Windows preset helper literal ASCII and spaced Unicode path contracts"
+    exit 0
+  }
+
   $buildCommand = @(& $helper -Action cmake-build-command -BuildPreset windows-ninja-msvc-release -BuildTarget kog_runtime_artifact)
   Assert-Contract `
     ($buildCommand.Count -eq 1 -and $buildCommand[0] -eq "cmake --build --preset windows-ninja-msvc-release --target kog_runtime_artifact") `
     "CMake build command did not preserve the bounded target."
-
-  [void](New-Item -ItemType Directory -Path $testRoot -Force)
 
   $toolDirectories = New-Object System.Collections.Generic.List[string]
   foreach ($tool in @("cmake", "ninja", "git", "bash", "pixi", "python")) {
@@ -89,7 +117,10 @@ try {
   if (-not [string]::IsNullOrWhiteSpace($substDrive)) {
     & $helper -Action cleanup-subst -Drive $substDrive 2>$null
   }
-  Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+  $resolvedTestRoot = [System.IO.Path]::GetFullPath($testRoot)
+  Assert-Contract ($resolvedTestRoot.StartsWith($repoRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) `
+    "Contract cleanup target must stay within the repository."
+  Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "PASS: Windows preset helper contracts"

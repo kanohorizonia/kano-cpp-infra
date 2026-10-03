@@ -156,6 +156,66 @@ bool kano_process_run_ex_v2(const KanoProcessOptions* options,
                             const KanoProcessCaptureLimitsV2* limits,
                             KanoProcessResultV2* out_result);
 
+/* Additive unattended contract. Legacy timeout_ms == 0 remains unlimited. */
+typedef enum KanoUnattendedProcessStatus {
+    KANO_UNATTENDED_PROCESS_COMPLETED = 0,
+    KANO_UNATTENDED_PROCESS_INVALID_OPTIONS,
+    KANO_UNATTENDED_PROCESS_LAUNCH_FAILED,
+    KANO_UNATTENDED_PROCESS_CONTAINMENT_FAILED,
+    KANO_UNATTENDED_PROCESS_TIMED_OUT,
+    KANO_UNATTENDED_PROCESS_CAPTURE_FAILED,
+    KANO_UNATTENDED_PROCESS_CLEANUP_FAILED,
+} KanoUnattendedProcessStatus;
+
+typedef enum KanoProcessContainment {
+    KANO_PROCESS_CONTAINMENT_NONE = 0,
+    KANO_PROCESS_CONTAINMENT_WINDOWS_JOB,
+    KANO_PROCESS_CONTAINMENT_POSIX_GROUP,
+} KanoProcessContainment;
+
+typedef struct KanoUnattendedProcessOptions {
+    const char* executable;
+    const char* working_dir;
+    const char* const* argv; /* arguments excluding executable, on every OS */
+    size_t argv_count;
+    KanoProcessMode mode;
+    int timeout_ms;         /* required positive launch/wait/drain budget */
+    int cleanup_timeout_ms; /* required positive, separate cleanup budget */
+    KanoProcessCaptureLimitsV2 capture_limits; /* both positive in capture mode */
+} KanoUnattendedProcessOptions;
+
+typedef struct KanoUnattendedProcessResult {
+    KanoProcessResultV2 process;
+    KanoUnattendedProcessStatus status;
+    KanoProcessContainment containment;
+    bool cleanup_complete; /* owned containment empty, observed members stopped */
+    unsigned long system_error; /* first OS error, zero when unavailable */
+    long long elapsed_ms; /* monotonic elapsed time, including launch/cleanup */
+} KanoUnattendedProcessResult;
+
+/**
+ * Run with finite budgets and bounded capture, without caller callbacks.
+ * Returns true only for COMPLETED; inspect process.exit_code for child success.
+ * A Windows child is suspended until a kill-on-close Job is configured and
+ * assignment succeeds. Setup failure never resumes it. A POSIX child establishes
+ * a process group before exec. POSIX groups cannot contain descendants that use
+ * setsid/setpgid to escape; cleanup_complete refers only to the owned group.
+ * An escaped inherited writer produces CLEANUP_FAILED when the budget expires.
+ * Windows cleanup retains at most 1024 observed member handles; a larger or
+ * inaccessible membership fails confirmation, while the owned Job is killed.
+ * Kernel launch calls and host scheduling can overrun the requested budgets;
+ * every explicit wait/drain is bounded by the shared monotonic deadlines.
+ * The caller owns captured buffers even on failure; always free the result.
+ */
+bool kano_process_run_unattended(const KanoUnattendedProcessOptions* options,
+                                 KanoUnattendedProcessResult* out_result);
+void kano_process_free_unattended_result(KanoUnattendedProcessResult* result);
+
+#ifdef KANO_PROCESS_TESTING
+/* Deterministic test-only injection; absent from production builds. */
+void kano_process_test_fail_next_containment_setup(void);
+#endif
+
 /* ---------------------------------------------------------------------------
  * Query (only valid after spawn, before free)
  * --------------------------------------------------------------------------- */

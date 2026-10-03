@@ -2,6 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/../lib/native_tool.sh"
+kano_cpp_infra_watchdog_enter "$0" "$@"
+
 
 export KANO_CXX_PROFILE_RUN_MODE="pgo-gather-with-coverage"
 export KANO_CPP_INFRA_PGO_REBUILD_SKIP_USE=1

@@ -2,6 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/../lib/native_tool.sh"
+kano_cpp_infra_watchdog_enter "$0" "$@"
+
 CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-$(cd -- "$SCRIPT_DIR/../../../.." && pwd)}"
 LIB_ROOT="$CPP_ROOT/shared/infra/scripts/lib"
 STAGES_ROOT="$CPP_ROOT/shared/infra/scripts/stages"

@@ -51,9 +51,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/../lib/native_tool.sh"
+kano_cpp_infra_watchdog_enter "$0" "$@"
+
 CPP_ROOT="${KANO_CPP_INFRA_CPP_ROOT:-$(cd -- "$SCRIPT_DIR/../../../.." && pwd)}"
 REPORT_SKILL_ADAPTER_SH="$SCRIPT_DIR/../lib/report_skill_adapter.sh"
 . "$SCRIPT_DIR/../lib/native_tool.sh"
+kano_cpp_infra_test_timeout_audit "$CPP_ROOT" "${KANO_TEST_CONFIG:-Debug}"
+
 
 if [[ -f "$REPORT_SKILL_ADAPTER_SH" ]]; then
   # shellcheck disable=SC1090

@@ -2,6 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+. "$SCRIPT_DIR/../lib/native_tool.sh"
+kano_cpp_infra_watchdog_enter "$0" "$@"
+
 INFRA_SCRIPTS_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 INFRA_BASE_DIR="$(cd -- "$INFRA_SCRIPTS_DIR/.." && pwd)"
 CPP_ROOT="$(cd -- "$INFRA_BASE_DIR/../.." && pwd)"
@@ -90,6 +93,8 @@ export KANO_BDD_METADATA_DIR="${KANO_BDD_METADATA_DIR:-$REPORT_ROOT/raw/bdd-meta
 export KANO_CTEST_OUTPUT_SIZE_PASSED="${KANO_CTEST_OUTPUT_SIZE_PASSED:-262144}"
 export KANO_CTEST_OUTPUT_SIZE_FAILED="${KANO_CTEST_OUTPUT_SIZE_FAILED:-1048576}"
 BDD_TEST_BINARY="${BDD_TEST_BINARY:-kano_git_cli_tests}"
+
+kano_cpp_infra_test_timeout_audit "$CPP_ROOT" "${CONFIG}"
 
 mkdir -p "$REPORT_ROOT/raw"
 rm -rf -- "$KANO_BDD_METADATA_DIR"

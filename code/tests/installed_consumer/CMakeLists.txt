@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.16)
+project(kano-infra-installed-consumer LANGUAGES CXX)
+find_package(KanoInfra REQUIRED CONFIG COMPONENTS unattended)
+add_executable(installed_unattended main.cpp)
+target_link_libraries(installed_unattended PRIVATE KanoInfra::unattended)

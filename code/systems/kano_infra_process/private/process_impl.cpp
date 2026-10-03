@@ -31,6 +31,7 @@ struct KanoProcessImpl {
     KanoProcessOutputCallback output_callback;
     void* user_data;
     bool spawned;
+    bool strict_unattended;
     char* cmdline;
 #ifdef _WIN32
     PROCESS_INFORMATION process_info;
@@ -46,6 +47,37 @@ struct KanoProcessImpl {
 };
 
 void kano_process_free(KanoProcess proc);
+
+#ifdef KANO_PROCESS_TESTING
+static bool kano_process_fail_containment_setup = false;
+void kano_process_test_fail_next_containment_setup(void) {
+    kano_process_fail_containment_setup = true;
+}
+#endif
+
+static bool kano_process_injected_containment_failure(void) {
+#ifdef KANO_PROCESS_TESTING
+    const bool fail = kano_process_fail_containment_setup;
+    kano_process_fail_containment_setup = false;
+    return fail;
+#else
+    return false;
+#endif
+}
+
+static void kano_process_strict_error(KanoUnattendedProcessResult* result,
+                                      KanoUnattendedProcessStatus status,
+                                      unsigned long error) {
+    if (!result) return;
+    result->status = status;
+    if (!result->system_error) result->system_error = error;
+}
+
+#ifdef _WIN32
+static long long kano_process_now_ms(void) {
+    return (long long)GetTickCount64();
+}
+#endif
 
 static char* kano_process_dup_string(const char* value) {
     char* out;
@@ -214,7 +246,8 @@ static char* kano_process_build_command_line(KanoProcess proc) {
     char* out;
 
     total += kano_process_windows_quote_capacity(proc->executable);
-    for (i = 1; i < proc->arg_count; ++i) {
+    const size_t first_arg = proc->strict_unattended ? 0 : 1;
+    for (i = first_arg; i < proc->arg_count; ++i) {
         total += 1;
         if (kano_process_is_cmd_payload(proc, i)) {
             total += strlen(proc->args[i]) + 2;
@@ -231,7 +264,7 @@ static char* kano_process_build_command_line(KanoProcess proc) {
     out = cmd;
     out = kano_process_append_windows_quoted_arg(out, proc->executable);
 
-    for (i = 1; i < proc->arg_count; ++i) {
+    for (i = first_arg; i < proc->arg_count; ++i) {
         const size_t len = strlen(proc->args[i]);
         *out++ = ' ';
         if (kano_process_is_cmd_payload(proc, i)) {
@@ -258,7 +291,7 @@ static bool kano_process_append_buffer(char** target, size_t* target_size, const
                                        size_t max_size, bool* truncated) {
     char* next;
     size_t retained = data_size;
-    if (max_size > 0 && *target_size + retained > max_size) {
+    if (max_size > 0 && (*target_size >= max_size || retained > max_size - *target_size)) {
         retained = *target_size >= max_size ? 0 : max_size - *target_size;
         *truncated = true;
     }
@@ -412,7 +445,7 @@ static bool kano_process_append_buffer(char** target, size_t* target_size, const
                                        size_t max_size, bool* truncated) {
     char* next;
     size_t retained = data_size;
-    if (max_size > 0 && *target_size + retained > max_size) {
+    if (max_size > 0 && (*target_size >= max_size || retained > max_size - *target_size)) {
         retained = *target_size >= max_size ? 0 : max_size - *target_size;
         *truncated = true;
     }
@@ -656,9 +689,16 @@ KanoProcess kano_process_spawn(const char* executable, const char* working_dir, 
     return kano_process_spawn_ex(&options);
 }
 
-KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
+static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options,
+                                               KanoUnattendedProcessResult* strict_result,
+                                               long long deadline_ms,
+                                               int cleanup_timeout_ms) {
     KanoProcess proc = kano_process_alloc(options);
-    if (!proc) return NULL;
+    if (!proc) {
+        kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, 0);
+        return NULL;
+    }
+    proc->strict_unattended = strict_result != NULL;
 
 #ifdef _WIN32
     {
@@ -670,6 +710,7 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
 
         proc->cmdline = kano_process_build_command_line(proc);
         if (!proc->cmdline) {
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, 0);
             kano_process_free(proc);
             return NULL;
         }
@@ -679,17 +720,24 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
         sa.bInheritHandle = TRUE;
 
         if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
-            if (!CreatePipe(&proc->stdout_read, &stdout_write, &sa, 0) ||
-                !CreatePipe(&proc->stderr_read, &stderr_write, &sa, 0)) {
-                if (proc->stdout_read) CloseHandle(proc->stdout_read);
+            const DWORD pipe_size = strict_result ? 65536 : 0;
+            if (!CreatePipe(&proc->stdout_read, &stdout_write, &sa, pipe_size) ||
+                !CreatePipe(&proc->stderr_read, &stderr_write, &sa, pipe_size)) {
+                kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, GetLastError());
                 if (stdout_write) CloseHandle(stdout_write);
-                if (proc->stderr_read) CloseHandle(proc->stderr_read);
                 if (stderr_write) CloseHandle(stderr_write);
                 kano_process_free(proc);
                 return NULL;
             }
-            SetHandleInformation(proc->stdout_read, HANDLE_FLAG_INHERIT, 0);
-            SetHandleInformation(proc->stderr_read, HANDLE_FLAG_INHERIT, 0);
+            const BOOL stdout_set = SetHandleInformation(proc->stdout_read, HANDLE_FLAG_INHERIT, 0);
+            const BOOL stderr_set = SetHandleInformation(proc->stderr_read, HANDLE_FLAG_INHERIT, 0);
+            if (strict_result && (!stdout_set || !stderr_set)) {
+                kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, GetLastError());
+                CloseHandle(stdout_write);
+                CloseHandle(stderr_write);
+                kano_process_free(proc);
+                return NULL;
+            }
         }
 
         memset(&si, 0, sizeof(si));
@@ -707,34 +755,77 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
             NULL,
             NULL,
             proc->mode == KANO_PROCESS_MODE_CAPTURE ? TRUE : FALSE,
-            CREATE_SUSPENDED,
+            CREATE_SUSPENDED | (strict_result && proc->mode == KANO_PROCESS_MODE_CAPTURE
+                ? CREATE_NO_WINDOW : 0),
             NULL,
             proc->working_dir,
             &si,
             &proc->process_info
         );
         if (!ok) {
-            if (proc->stdout_read) CloseHandle(proc->stdout_read);
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, GetLastError());
             if (stdout_write) CloseHandle(stdout_write);
-            if (proc->stderr_read) CloseHandle(proc->stderr_read);
             if (stderr_write) CloseHandle(stderr_write);
             kano_process_free(proc);
             return NULL;
         }
+        if (strict_result) strict_result->cleanup_complete = false;
 
         proc->job = CreateJobObjectA(NULL, NULL);
+        bool job_configured = false;
         if (proc->job != NULL) {
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit_info;
             memset(&limit_info, 0, sizeof(limit_info));
             limit_info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            SetInformationJobObject(proc->job, JobObjectExtendedLimitInformation, &limit_info, sizeof(limit_info));
-            if (!AssignProcessToJobObject(proc->job, proc->process_info.hProcess)) {
+            const BOOL configured = SetInformationJobObject(proc->job, JobObjectExtendedLimitInformation, &limit_info, sizeof(limit_info));
+            const bool injected = strict_result && kano_process_injected_containment_failure();
+            if (injected) SetLastError(ERROR_ACCESS_DENIED);
+            const BOOL assigned = (!strict_result || configured) && !injected
+                ? AssignProcessToJobObject(proc->job, proc->process_info.hProcess) : FALSE;
+            job_configured = configured && assigned;
+            if (!assigned) {
+                const DWORD error = GetLastError();
                 CloseHandle(proc->job);
                 proc->job = NULL;
+                if (strict_result) SetLastError(error);
             }
         }
 
-        ResumeThread(proc->process_info.hThread);
+        if (strict_result && job_configured)
+            strict_result->containment = KANO_PROCESS_CONTAINMENT_WINDOWS_JOB;
+        if (strict_result && (!job_configured || kano_process_now_ms() >= deadline_ms)) {
+            kano_process_strict_error(strict_result, !job_configured
+                ? KANO_UNATTENDED_PROCESS_CONTAINMENT_FAILED : KANO_UNATTENDED_PROCESS_TIMED_OUT,
+                !job_configured ? GetLastError() : 0);
+            strict_result->process.timed_out = job_configured;
+            strict_result->process.exit_code = job_configured ? 124 : -1;
+            const long long cleanup_deadline = kano_process_now_ms() + cleanup_timeout_ms;
+            const BOOL terminated = TerminateProcess(proc->process_info.hProcess, 1);
+            const long long remaining = cleanup_deadline - kano_process_now_ms();
+            strict_result->cleanup_complete = terminated && WaitForSingleObject(proc->process_info.hProcess,
+                remaining > 0 ? (DWORD)remaining : 0) == WAIT_OBJECT_0;
+            if (!strict_result->cleanup_complete)
+                kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, GetLastError());
+            if (stdout_write) CloseHandle(stdout_write);
+            if (stderr_write) CloseHandle(stderr_write);
+            kano_process_free(proc);
+            return NULL;
+        }
+        const DWORD resumed = ResumeThread(proc->process_info.hThread);
+        if (strict_result && resumed == (DWORD)-1) {
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, GetLastError());
+            const long long cleanup_deadline = kano_process_now_ms() + cleanup_timeout_ms;
+            TerminateJobObject(proc->job, 1);
+            const long long remaining = cleanup_deadline - kano_process_now_ms();
+            strict_result->cleanup_complete = WaitForSingleObject(proc->process_info.hProcess,
+                remaining > 0 ? (DWORD)remaining : 0) == WAIT_OBJECT_0;
+            if (!strict_result->cleanup_complete)
+                kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, 0);
+            if (stdout_write) CloseHandle(stdout_write);
+            if (stderr_write) CloseHandle(stderr_write);
+            kano_process_free(proc);
+            return NULL;
+        }
         proc->spawned = true;
 
         if (stdout_write) CloseHandle(stdout_write);
@@ -746,15 +837,19 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
         char** argv = kano_process_build_exec_argv(proc);
         int stdout_pipe[2] = {-1, -1};
         int stderr_pipe[2] = {-1, -1};
+        int setup_pipe[2] = {-1, -1};
+        const bool inject_containment_failure = strict_result && kano_process_injected_containment_failure();
         pid_t pid;
 
         if (!argv) {
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, 0);
             kano_process_free(proc);
             return NULL;
         }
 
         if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
             if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
+                kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno);
                 if (stdout_pipe[0] >= 0) close(stdout_pipe[0]);
                 if (stdout_pipe[1] >= 0) close(stdout_pipe[1]);
                 if (stderr_pipe[0] >= 0) close(stderr_pipe[0]);
@@ -765,8 +860,41 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
             }
         }
 
+        if (strict_result && (pipe(setup_pipe) != 0 ||
+            fcntl(setup_pipe[1], F_SETFD, FD_CLOEXEC) != 0 ||
+            !kano_process_make_nonblocking(setup_pipe[0]))) {
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno);
+            if (setup_pipe[0] >= 0) close(setup_pipe[0]);
+            if (setup_pipe[1] >= 0) close(setup_pipe[1]);
+            if (stdout_pipe[0] >= 0) close(stdout_pipe[0]);
+            if (stdout_pipe[1] >= 0) close(stdout_pipe[1]);
+            if (stderr_pipe[0] >= 0) close(stderr_pipe[0]);
+            if (stderr_pipe[1] >= 0) close(stderr_pipe[1]);
+            free(argv);
+            kano_process_free(proc);
+            return NULL;
+        }
+
+        if (strict_result && kano_process_now_ms() >= deadline_ms) {
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_TIMED_OUT, 0);
+            strict_result->process.timed_out = true;
+            strict_result->process.exit_code = 124;
+            close(setup_pipe[0]);
+            close(setup_pipe[1]);
+            if (stdout_pipe[0] >= 0) close(stdout_pipe[0]);
+            if (stdout_pipe[1] >= 0) close(stdout_pipe[1]);
+            if (stderr_pipe[0] >= 0) close(stderr_pipe[0]);
+            if (stderr_pipe[1] >= 0) close(stderr_pipe[1]);
+            free(argv);
+            kano_process_free(proc);
+            return NULL;
+        }
+
         pid = fork();
         if (pid < 0) {
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno);
+            if (setup_pipe[0] >= 0) close(setup_pipe[0]);
+            if (setup_pipe[1] >= 0) close(setup_pipe[1]);
             if (stdout_pipe[0] >= 0) close(stdout_pipe[0]);
             if (stdout_pipe[1] >= 0) close(stdout_pipe[1]);
             if (stderr_pipe[0] >= 0) close(stderr_pipe[0]);
@@ -777,21 +905,40 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
         }
 
         if (pid == 0) {
-            if (setpgid(0, 0) != 0) {
+            if (strict_result) close(setup_pipe[0]);
+            if (inject_containment_failure || setpgid(0, 0) != 0) {
+                if (strict_result) {
+                    int failure[2] = {KANO_UNATTENDED_PROCESS_CONTAINMENT_FAILED,
+                                      inject_containment_failure ? EPERM : errno};
+                    (void)write(setup_pipe[1], failure, sizeof(failure));
+                }
                 _exit(127);
             }
             if (proc->working_dir && chdir(proc->working_dir) != 0) {
+                if (strict_result) {
+                    int failure[2] = {KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno};
+                    (void)write(setup_pipe[1], failure, sizeof(failure));
+                }
                 _exit(127);
             }
             if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
                 close(stdout_pipe[0]);
                 close(stderr_pipe[0]);
-                dup2(stdout_pipe[1], STDOUT_FILENO);
-                dup2(stderr_pipe[1], STDERR_FILENO);
+                const int stdout_dup = dup2(stdout_pipe[1], STDOUT_FILENO);
+                const int stderr_dup = dup2(stderr_pipe[1], STDERR_FILENO);
+                if (strict_result && (stdout_dup < 0 || stderr_dup < 0)) {
+                    int failure[2] = {KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno};
+                    (void)write(setup_pipe[1], failure, sizeof(failure));
+                    _exit(127);
+                }
                 close(stdout_pipe[1]);
                 close(stderr_pipe[1]);
             }
             execvp(proc->executable, argv);
+            if (strict_result) {
+                int failure[2] = {KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno};
+                (void)write(setup_pipe[1], failure, sizeof(failure));
+            }
             _exit(127);
         }
 
@@ -801,26 +948,89 @@ KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
          * run before the child does so. EACCES means the child already exec'd
          * after establishing its group; ESRCH means it already exited.
          */
-        while (setpgid(pid, pid) != 0 && errno == EINTR) {
-        }
+        int group_result;
+        do { group_result = setpgid(pid, pid); }
+        while (group_result != 0 && errno == EINTR &&
+               (!strict_result || kano_process_now_ms() < deadline_ms));
+        const int group_error = group_result == 0 ? 0 : errno;
 
         free(argv);
         proc->pid = pid;
         proc->process_group = pid;
         proc->spawned = true;
+        if (strict_result) strict_result->cleanup_complete = false;
 
         if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
             close(stdout_pipe[1]);
             close(stderr_pipe[1]);
             proc->stdout_fd = stdout_pipe[0];
             proc->stderr_fd = stderr_pipe[0];
-            kano_process_make_nonblocking(proc->stdout_fd);
-            kano_process_make_nonblocking(proc->stderr_fd);
+            const bool stdout_nonblocking = kano_process_make_nonblocking(proc->stdout_fd);
+            const bool stderr_nonblocking = kano_process_make_nonblocking(proc->stderr_fd);
+            if (strict_result && (!stdout_nonblocking || !stderr_nonblocking))
+                kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_CAPTURE_FAILED, errno);
+        }
+
+        if (strict_result) {
+            close(setup_pipe[1]);
+            int failure[2] = {0, 0};
+            bool setup_complete = false;
+            while (strict_result->status == KANO_UNATTENDED_PROCESS_COMPLETED) {
+                const ssize_t count = read(setup_pipe[0], failure, sizeof(failure));
+                if (count == 0) { setup_complete = true; break; }
+                if (count > 0) {
+                    kano_process_strict_error(strict_result, count == sizeof(failure)
+                        ? (KanoUnattendedProcessStatus)failure[0] : KANO_UNATTENDED_PROCESS_LAUNCH_FAILED,
+                        count == sizeof(failure) ? (unsigned long)failure[1] : EIO);
+                    break;
+                }
+                if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                    kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno);
+                    break;
+                }
+                const long long remaining = deadline_ms - kano_process_now_ms();
+                if (remaining <= 0) {
+                    kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_TIMED_OUT, 0);
+                    strict_result->process.timed_out = true;
+                    strict_result->process.exit_code = 124;
+                    break;
+                }
+                struct pollfd setup_fd = {setup_pipe[0], POLLIN | POLLHUP, 0};
+                if (poll(&setup_fd, 1, remaining > 10 ? 10 : (int)remaining) < 0 && errno != EINTR) {
+                    kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno);
+                    break;
+                }
+            }
+            close(setup_pipe[0]);
+            if (setup_complete && group_result != 0 && group_error != EACCES && group_error != ESRCH)
+                kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_CONTAINMENT_FAILED, group_error);
+            if (strict_result->status != KANO_UNATTENDED_PROCESS_COMPLETED) {
+                const long long cleanup_deadline = kano_process_now_ms() + cleanup_timeout_ms;
+                kano_process_signal_unreaped_tree(proc, SIGKILL);
+                int status = 0;
+                while (kano_process_now_ms() < cleanup_deadline) {
+                    const pid_t waited = waitpid(proc->pid, &status, WNOHANG);
+                    if (waited == proc->pid || (waited < 0 && errno == ECHILD)) {
+                        strict_result->cleanup_complete = true;
+                        break;
+                    }
+                    usleep(1000);
+                }
+                if (!strict_result->cleanup_complete)
+                    kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, errno);
+                kano_process_free(proc);
+                return NULL;
+            }
+            strict_result->containment = KANO_PROCESS_CONTAINMENT_POSIX_GROUP;
         }
 
         return proc;
     }
 #endif
+}
+
+KanoProcess kano_process_spawn_ex(const KanoProcessOptions* options) {
+    return kano_process_spawn_internal(options, NULL, 0, 0);
 }
 
 bool kano_process_wait_v2(KanoProcess proc, int timeout_ms,
@@ -1080,6 +1290,280 @@ bool kano_process_run_ex_v2(const KanoProcessOptions* options,
     ok = kano_process_wait_v2(proc, options ? options->timeout_ms : 0, limits, out_result);
     kano_process_free(proc);
     return ok;
+}
+
+/* Strict capture has one owner and never calls client code or reader threads. */
+static bool kano_process_strict_read(KanoProcess proc, bool stderr_stream,
+                                     const KanoProcessCaptureLimitsV2* limits,
+                                     KanoUnattendedProcessResult* result,
+                                     bool* made_progress) {
+    char buffer[8192];
+    size_t remaining_budget = 65536;
+    KanoProcessResultV2* capture = &result->process;
+    char** target = stderr_stream ? &capture->stderr_data : &capture->stdout_data;
+    size_t* size = stderr_stream ? &capture->stderr_size : &capture->stdout_size;
+    bool* truncated = stderr_stream ? &capture->stderr_truncated : &capture->stdout_truncated;
+    const size_t max_size = stderr_stream ? limits->stderr_max_bytes : limits->stdout_max_bytes;
+    while (remaining_budget > 0) {
+#ifdef _WIN32
+        HANDLE* handle = stderr_stream ? &proc->stderr_read : &proc->stdout_read;
+        if (!*handle) return true;
+        DWORD available = 0;
+        if (!PeekNamedPipe(*handle, NULL, 0, NULL, &available, NULL)) {
+            const DWORD error = GetLastError();
+            CloseHandle(*handle);
+            *handle = NULL;
+            if (error == ERROR_BROKEN_PIPE) return true;
+            kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CAPTURE_FAILED, error);
+            return false;
+        }
+        if (!available) return true;
+        DWORD count = 0;
+        const DWORD requested = available < sizeof(buffer) ? available : (DWORD)sizeof(buffer);
+        if (!ReadFile(*handle, buffer, requested, &count, NULL) || !count) {
+            const DWORD error = GetLastError();
+            kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CAPTURE_FAILED, error);
+            return false;
+        }
+#else
+        int* fd = stderr_stream ? &proc->stderr_fd : &proc->stdout_fd;
+        if (*fd < 0) return true;
+        const ssize_t count = read(*fd, buffer, sizeof(buffer));
+        if (count == 0) { close(*fd); *fd = -1; return true; }
+        if (count < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return true;
+            kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CAPTURE_FAILED, errno);
+            return false;
+        }
+#endif
+        if (!kano_process_append_buffer(target, size, buffer, (size_t)count, max_size, truncated)) {
+            kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CAPTURE_FAILED, 0);
+            return false;
+        }
+        *made_progress = true;
+        remaining_budget -= (size_t)count;
+    }
+    return true;
+}
+
+static bool kano_process_strict_pipes_closed(KanoProcess proc) {
+#ifdef _WIN32
+    return !proc->stdout_read && !proc->stderr_read;
+#else
+    return proc->stdout_fd < 0 && proc->stderr_fd < 0;
+#endif
+}
+
+#ifdef _WIN32
+/* Bound diagnostic ownership retention, independently of capture size. */
+static const size_t kano_process_max_cleanup_handles = 1024;
+static bool kano_process_strict_collect_members(KanoProcess proc, HANDLE* handles,
+                                                size_t* count,
+                                                long long cleanup_deadline,
+                                                KanoUnattendedProcessResult* result) {
+    struct {
+        DWORD assigned;
+        DWORD count;
+        ULONG_PTR pids[kano_process_max_cleanup_handles];
+    } members = {};
+    if (!QueryInformationJobObject(proc->job, JobObjectBasicProcessIdList,
+                                    &members, sizeof(members), NULL)) {
+        kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, GetLastError());
+        return false;
+    }
+    if (members.assigned > members.count || members.count > kano_process_max_cleanup_handles) {
+        kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, ERROR_MORE_DATA);
+        return false;
+    }
+    for (DWORD i = 0; i < members.count; ++i) {
+        if (kano_process_now_ms() >= cleanup_deadline) {
+            kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, 0);
+            return false;
+        }
+        if ((DWORD)members.pids[i] == proc->process_info.dwProcessId) continue;
+        HANDLE handle = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)members.pids[i]);
+        if (!handle) {
+            const DWORD error = GetLastError();
+            if (error == ERROR_INVALID_PARAMETER) continue; /* already terminated */
+            kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, error);
+            return false;
+        }
+        handles[(*count)++] = handle;
+    }
+    return true;
+}
+#endif
+
+static void kano_process_wait_unattended(KanoProcess proc,
+                                        const KanoUnattendedProcessOptions* options,
+                                        long long primary_deadline,
+                                        KanoUnattendedProcessResult* result) {
+    bool root_done = false;
+    bool root_reaped = false;
+    bool cleanup_started = false;
+    bool containment_empty = false;
+    long long cleanup_deadline = 0;
+#ifdef _WIN32
+    HANDLE member_handles[kano_process_max_cleanup_handles] = {};
+    size_t member_count = 0;
+    bool members_observable = true;
+#endif
+    result->cleanup_complete = false;
+    while (true) {
+        bool made_progress = false;
+        if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
+            if (!kano_process_strict_read(proc, false, &options->capture_limits, result, &made_progress) ||
+                !kano_process_strict_read(proc, true, &options->capture_limits, result, &made_progress)) {
+                if (!cleanup_started) cleanup_deadline = kano_process_now_ms() + options->cleanup_timeout_ms;
+            }
+        }
+#ifdef _WIN32
+        if (!root_done) {
+            const DWORD waited = WaitForSingleObject(proc->process_info.hProcess, 0);
+            if (waited == WAIT_OBJECT_0) {
+                DWORD code = 0;
+                if (!GetExitCodeProcess(proc->process_info.hProcess, &code))
+                    kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CAPTURE_FAILED, GetLastError());
+                else if (!result->process.timed_out) result->process.exit_code = (int)code;
+                root_done = root_reaped = true;
+            } else if (waited == WAIT_FAILED) {
+                kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CAPTURE_FAILED, GetLastError());
+            }
+        }
+#else
+        if (!root_done) {
+            siginfo_t info;
+            memset(&info, 0, sizeof(info));
+            if (waitid(P_PID, (id_t)proc->pid, &info, WEXITED | WNOHANG | WNOWAIT) == 0) {
+                if (info.si_pid == proc->pid) {
+                    root_done = true;
+                    if (!result->process.timed_out)
+                        result->process.exit_code = info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status;
+                }
+            } else if (errno != EINTR) {
+                kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CAPTURE_FAILED, errno);
+            }
+        }
+#endif
+        const long long now = kano_process_now_ms();
+        if (!cleanup_started && now >= primary_deadline) {
+            result->process.timed_out = true;
+            result->process.exit_code = 124;
+            kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_TIMED_OUT, 0);
+        }
+        if (!cleanup_started && (root_done || result->status != KANO_UNATTENDED_PROCESS_COMPLETED)) {
+            cleanup_started = true;
+            cleanup_deadline = now + options->cleanup_timeout_ms;
+#ifdef _WIN32
+            members_observable = kano_process_strict_collect_members(proc, member_handles, &member_count,
+                                                                      cleanup_deadline, result);
+            if (!TerminateJobObject(proc->job, result->process.timed_out ? 124 : 1))
+                kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, GetLastError());
+#else
+            /* Signal before reaping: the leader reserves its PID/group identity. */
+            if (!kano_process_signal_unreaped_tree(proc, SIGKILL))
+                kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, errno);
+#endif
+        }
+        if (cleanup_started) {
+#ifdef _WIN32
+            bool members_stopped = members_observable;
+            for (size_t i = 0; i < member_count; ++i) {
+                const DWORD waited = WaitForSingleObject(member_handles[i], 0);
+                if (waited != WAIT_OBJECT_0) members_stopped = false;
+                if (waited == WAIT_FAILED)
+                    kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, GetLastError());
+            }
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+            memset(&accounting, 0, sizeof(accounting));
+            if (!QueryInformationJobObject(proc->job, JobObjectBasicAccountingInformation,
+                                           &accounting, sizeof(accounting), NULL))
+                kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, GetLastError());
+            else containment_empty = accounting.ActiveProcesses == 0 && members_stopped;
+#else
+            if (root_done && !root_reaped) {
+                int status = 0;
+                const pid_t waited = waitpid(proc->pid, &status, WNOHANG);
+                if (waited == proc->pid) root_reaped = true;
+                else if (waited < 0 && errno != EINTR)
+                    kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, errno);
+            }
+            if (root_reaped) {
+                if (kill(-proc->process_group, 0) != 0) {
+                    if (errno == ESRCH) containment_empty = true;
+                    else kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, errno);
+                }
+            }
+#endif
+            if (root_reaped && containment_empty && kano_process_strict_pipes_closed(proc)) {
+                result->cleanup_complete = true;
+#ifdef _WIN32
+                for (size_t i = 0; i < member_count; ++i) CloseHandle(member_handles[i]);
+#endif
+                return;
+            }
+            if (kano_process_now_ms() >= cleanup_deadline) {
+                kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, 0);
+#ifdef _WIN32
+                for (size_t i = 0; i < member_count; ++i) CloseHandle(member_handles[i]);
+#endif
+                return;
+            }
+        }
+        const long long active_deadline = cleanup_started ? cleanup_deadline : primary_deadline;
+        const long long remaining = active_deadline - kano_process_now_ms();
+        if (remaining > 0 && !made_progress) {
+#ifdef _WIN32
+            Sleep((DWORD)(remaining < 5 ? remaining : 5));
+#else
+            (void)poll(NULL, 0, (int)(remaining < 5 ? remaining : 5));
+#endif
+        }
+    }
+}
+
+bool kano_process_run_unattended(const KanoUnattendedProcessOptions* options,
+                                 KanoUnattendedProcessResult* out_result) {
+    if (!out_result) return false;
+    memset(out_result, 0, sizeof(*out_result));
+    out_result->process.exit_code = -1;
+    out_result->status = KANO_UNATTENDED_PROCESS_INVALID_OPTIONS;
+    out_result->cleanup_complete = true; /* rejected options created no process */
+    const long long started = kano_process_now_ms();
+    if (!options || !options->executable || !*options->executable ||
+        options->timeout_ms <= 0 || options->cleanup_timeout_ms <= 0 ||
+        (options->argv_count && !options->argv) ||
+        options->argv_count > ((size_t)-1) / sizeof(char*) - 2 ||
+        (options->mode != KANO_PROCESS_MODE_CAPTURE && options->mode != KANO_PROCESS_MODE_PASS_THROUGH) ||
+        (options->mode == KANO_PROCESS_MODE_CAPTURE &&
+         (!options->capture_limits.stdout_max_bytes || !options->capture_limits.stderr_max_bytes ||
+          options->capture_limits.stdout_max_bytes == (size_t)-1 ||
+          options->capture_limits.stderr_max_bytes == (size_t)-1))) return false;
+    for (size_t i = 0; i < options->argv_count; ++i) if (!options->argv[i]) return false;
+    KanoProcessOptions legacy_options;
+    memset(&legacy_options, 0, sizeof(legacy_options));
+    legacy_options.executable = options->executable;
+    legacy_options.working_dir = options->working_dir;
+    legacy_options.argv = options->argv;
+    legacy_options.argv_count = options->argv_count;
+    legacy_options.mode = options->mode;
+    legacy_options.timeout_ms = options->timeout_ms;
+    out_result->status = KANO_UNATTENDED_PROCESS_COMPLETED;
+    const long long deadline = started + options->timeout_ms;
+    KanoProcess proc = kano_process_spawn_internal(&legacy_options, out_result, deadline,
+                                                  options->cleanup_timeout_ms);
+    if (proc) {
+        kano_process_wait_unattended(proc, options, deadline, out_result);
+        kano_process_free(proc);
+    }
+    out_result->elapsed_ms = kano_process_now_ms() - started;
+    return out_result->status == KANO_UNATTENDED_PROCESS_COMPLETED;
+}
+
+void kano_process_free_unattended_result(KanoUnattendedProcessResult* result) {
+    if (!result) return;
+    kano_process_free_result_v2(&result->process);
+    memset(result, 0, sizeof(*result));
 }
 
 bool kano_process_is_running(KanoProcess proc) {
