@@ -30,6 +30,8 @@ struct KanoProcessImpl {
     int timeout_ms;
     KanoProcessOutputCallback output_callback;
     void* user_data;
+    KanoProcessCancellationObserver cancellation_observer;
+    void* cancellation_user_data;
     bool spawned;
     bool strict_unattended;
     char* cmdline;
@@ -47,6 +49,11 @@ struct KanoProcessImpl {
 };
 
 void kano_process_free(KanoProcess proc);
+
+static bool kano_process_cancellation_requested(KanoProcess proc) {
+    return proc && proc->cancellation_observer &&
+        proc->cancellation_observer(proc->cancellation_user_data);
+}
 
 #ifdef KANO_PROCESS_TESTING
 static bool kano_process_fail_containment_setup = false;
@@ -162,6 +169,8 @@ static KanoProcess kano_process_alloc(const KanoProcessOptions* options) {
     proc->timeout_ms = options->timeout_ms;
     proc->output_callback = options->output_callback;
     proc->user_data = options->user_data;
+    proc->cancellation_observer = options->cancellation_observer;
+    proc->cancellation_user_data = options->cancellation_user_data;
 #ifdef _WIN32
     memset(&proc->process_info, 0, sizeof(proc->process_info));
     proc->stdout_read = NULL;
@@ -494,6 +503,18 @@ static bool kano_process_read_fd(int fd,
     return true;
 }
 
+static bool kano_process_has_exited_unreaped(KanoProcess proc) {
+    siginfo_t info;
+    int rc;
+    if (!proc || !proc->spawned) return true;
+    memset(&info, 0, sizeof(info));
+    do {
+        rc = waitid(P_PID, (id_t)proc->pid, &info, WEXITED | WNOHANG | WNOWAIT);
+    } while (rc != 0 && errno == EINTR);
+    if (rc == 0) return info.si_pid == proc->pid;
+    return errno == ECHILD;
+}
+
 static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms,
                                       const KanoProcessCaptureLimitsV2* limits,
                                       KanoProcessResultV2* out_result) {
@@ -505,6 +526,7 @@ static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms,
     int stdout_open = (proc->stdout_fd >= 0);
     int stderr_open = (proc->stderr_fd >= 0);
     int process_done = 0;
+    int cleanup_requested = 0;
     int status = 0;
     long long start_ms = kano_process_now_ms();
     long long primary_deadline_ms = timeout_ms > 0 ? start_ms + (long long)timeout_ms : 0;
@@ -517,7 +539,7 @@ static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms,
         int poll_rc;
         pid_t waited;
 
-        if (out_result->timed_out) {
+        if (cleanup_requested) {
             long long remaining = cleanup_deadline_ms - kano_process_now_ms();
             poll_timeout = remaining > 0 && remaining < poll_timeout ? (int)remaining :
                            remaining <= 0 ? 0 : poll_timeout;
@@ -586,11 +608,11 @@ static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms,
          * still open. The zombie reserves its PID/PGID until the deadline, so
          * a later group signal cannot target a recycled unrelated process.
          */
-        if (!process_done && (out_result->timed_out || (!stdout_open && !stderr_open))) {
+        if (!process_done && (cleanup_requested || (!stdout_open && !stderr_open))) {
             waited = waitpid(proc->pid, &status, WNOHANG);
             if (waited == proc->pid) {
                 process_done = 1;
-                if (!out_result->timed_out) {
+                if (!out_result->timed_out && !out_result->cancelled) {
                     out_result->exit_code = kano_process_status_to_exit_code(status);
                 }
             } else if (waited < 0 && errno == ECHILD) {
@@ -604,11 +626,24 @@ static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms,
 
         if (process_done && !stdout_open && !stderr_open) break;
 
-        if (!out_result->timed_out && primary_deadline_ms > 0 &&
+        if (!cleanup_requested && kano_process_cancellation_requested(proc)) {
+            const bool process_completed = kano_process_has_exited_unreaped(proc);
+            kano_process_signal_unreaped_tree(proc, SIGKILL);
+            cleanup_requested = 1;
+            cleanup_deadline_ms = kano_process_now_ms() + cleanup_grace_ms;
+            if (!process_completed) {
+                out_result->cancelled = true;
+                out_result->exit_code = 130;
+            }
+            continue;
+        }
+
+        if (!cleanup_requested && primary_deadline_ms > 0 &&
             kano_process_now_ms() >= primary_deadline_ms) {
             kano_process_signal_unreaped_tree(proc, SIGKILL);
             out_result->timed_out = true;
             out_result->exit_code = 124;
+            cleanup_requested = 1;
             cleanup_deadline_ms = primary_deadline_ms + cleanup_grace_ms;
             continue;
         }
@@ -647,7 +682,7 @@ static bool kano_process_wait_capture(KanoProcess proc, int timeout_ms,
     out_result->stdout_size = stdout_size;
     out_result->stderr_data = stderr_buf;
     out_result->stderr_size = stderr_size;
-    if (!out_result->timed_out) {
+    if (!out_result->timed_out && !out_result->cancelled) {
         out_result->exit_code = kano_process_status_to_exit_code(status);
     }
     return true;
@@ -664,7 +699,15 @@ static bool kano_process_wait_passthrough(KanoProcess proc, int timeout_ms, Kano
             return true;
         }
         if (waited < 0) {
+            if (errno == EINTR) continue;
             return false;
+        }
+        if (kano_process_cancellation_requested(proc)) {
+            kano_process_signal_unreaped_tree(proc, SIGKILL);
+            waitpid(proc->pid, &status, 0);
+            out_result->cancelled = true;
+            out_result->exit_code = 130;
+            return true;
         }
         if (timeout_ms > 0 && (kano_process_now_ms() - start_ms) >= timeout_ms) {
             kano_process_signal_unreaped_tree(proc, SIGKILL);
@@ -1052,6 +1095,7 @@ bool kano_process_wait_v2(KanoProcess proc, int timeout_ms,
         bool process_done = false;
         bool reader_done[2] = {false, false};
         bool wait_failed = false;
+        bool cancellation_cleanup = false;
         ULONGLONG primary_deadline = timeout_ms > 0 ? GetTickCount64() + (ULONGLONG)timeout_ms : 0;
 
         memset(contexts, 0, sizeof(contexts));
@@ -1103,6 +1147,15 @@ bool kano_process_wait_v2(KanoProcess proc, int timeout_ms,
             }
             if (process_done && reader_done[0] && reader_done[1]) break;
 
+            if (kano_process_cancellation_requested(proc)) {
+                cancellation_cleanup = true;
+                if (!process_done) {
+                    out_result->cancelled = true;
+                    out_result->exit_code = 130;
+                }
+                break;
+            }
+
             if (primary_deadline > 0) {
                 ULONGLONG now = GetTickCount64();
                 ULONGLONG remaining;
@@ -1113,14 +1166,20 @@ bool kano_process_wait_v2(KanoProcess proc, int timeout_ms,
                 remaining = primary_deadline - now;
                 wait_ms = remaining > (ULONGLONG)MAXDWORD ? MAXDWORD : (DWORD)remaining;
             }
+            if (proc->cancellation_observer && wait_ms > 50) {
+                wait_ms = 50;
+            }
 
             if (!process_done) active[active_count++] = proc->process_info.hProcess;
             if (!reader_done[0]) active[active_count++] = readers[0];
             if (!reader_done[1]) active[active_count++] = readers[1];
             wait_result = WaitForMultipleObjects(active_count, active, FALSE, wait_ms);
             if (wait_result == WAIT_TIMEOUT) {
-                out_result->timed_out = true;
-                break;
+                if (primary_deadline > 0 && GetTickCount64() >= primary_deadline) {
+                    out_result->timed_out = true;
+                    break;
+                }
+                continue;
             }
             if (wait_result == WAIT_FAILED) {
                 wait_failed = true;
@@ -1128,7 +1187,7 @@ bool kano_process_wait_v2(KanoProcess proc, int timeout_ms,
             }
         }
 
-        if (out_result->timed_out || wait_failed) {
+        if (out_result->timed_out || cancellation_cleanup || wait_failed) {
             DWORD reader_wait;
             ULONGLONG cleanup_deadline = out_result->timed_out && primary_deadline > 0
                 ? primary_deadline + cleanup_grace_ms
@@ -1139,10 +1198,13 @@ bool kano_process_wait_v2(KanoProcess proc, int timeout_ms,
             if (out_result->timed_out) {
                 out_result->exit_code = 124;
             }
+            const UINT termination_code = out_result->timed_out
+                ? 124
+                : (out_result->cancelled ? 130 : 1);
             if (proc->job) {
-                TerminateJobObject(proc->job, out_result->timed_out ? 124 : 1);
+                TerminateJobObject(proc->job, termination_code);
             } else if (!process_done) {
-                TerminateProcess(proc->process_info.hProcess, out_result->timed_out ? 124 : 1);
+                TerminateProcess(proc->process_info.hProcess, termination_code);
             }
             kano_process_request_capture_cancel(contexts, readers);
 
@@ -1178,20 +1240,59 @@ bool kano_process_wait_v2(KanoProcess proc, int timeout_ms,
         out_result->stderr_data = stderr_buf;
         out_result->stderr_size = stderr_size;
     } else {
-        wait_result = WaitForSingleObject(proc->process_info.hProcess, timeout_ms > 0 ? (DWORD)timeout_ms : INFINITE);
-        if (wait_result == WAIT_TIMEOUT) {
-            out_result->timed_out = true;
-            out_result->exit_code = 124;
-            if (proc->job) {
-                TerminateJobObject(proc->job, 124);
-            } else {
-                TerminateProcess(proc->process_info.hProcess, 124);
+        const ULONGLONG primary_deadline = timeout_ms > 0
+            ? GetTickCount64() + (ULONGLONG)timeout_ms
+            : 0;
+        while (true) {
+            DWORD wait_ms = proc->cancellation_observer ? 50 : INFINITE;
+            if (primary_deadline > 0) {
+                const ULONGLONG now = GetTickCount64();
+                if (now >= primary_deadline) {
+                    wait_ms = 0;
+                } else {
+                    const ULONGLONG remaining = primary_deadline - now;
+                    const DWORD bounded_remaining = remaining > (ULONGLONG)MAXDWORD
+                        ? MAXDWORD
+                        : (DWORD)remaining;
+                    if (wait_ms == INFINITE || bounded_remaining < wait_ms) {
+                        wait_ms = bounded_remaining;
+                    }
+                }
             }
-            WaitForSingleObject(proc->process_info.hProcess, 5000);
+
+            wait_result = WaitForSingleObject(proc->process_info.hProcess, wait_ms);
+            if (wait_result == WAIT_OBJECT_0) {
+                break;
+            }
+            if (wait_result == WAIT_FAILED) {
+                return false;
+            }
+            if (kano_process_cancellation_requested(proc)) {
+                out_result->cancelled = true;
+                out_result->exit_code = 130;
+                if (proc->job) {
+                    TerminateJobObject(proc->job, 130);
+                } else {
+                    TerminateProcess(proc->process_info.hProcess, 130);
+                }
+                WaitForSingleObject(proc->process_info.hProcess, 5000);
+                break;
+            }
+            if (primary_deadline > 0 && GetTickCount64() >= primary_deadline) {
+                out_result->timed_out = true;
+                out_result->exit_code = 124;
+                if (proc->job) {
+                    TerminateJobObject(proc->job, 124);
+                } else {
+                    TerminateProcess(proc->process_info.hProcess, 124);
+                }
+                WaitForSingleObject(proc->process_info.hProcess, 5000);
+                break;
+            }
         }
     }
 
-    if (!out_result->timed_out) {
+    if (!out_result->timed_out && !out_result->cancelled) {
         DWORD exit_code = 0;
         GetExitCodeProcess(proc->process_info.hProcess, &exit_code);
         out_result->exit_code = (int)exit_code;
