@@ -425,7 +425,11 @@ static int parse_line(const char* line_in, const char* current_section,
         v.type = TOML_STRING;
         v.s = xstrdup(section_key);
         char section_buf[1024];
-        sprintf(section_buf, "__section__%s", section_key);
+        if (strlen(section_key) >= 256 || strlen(section_key) + 11 >= sizeof(section_buf)) {
+            free(v.s);
+            return 0;
+        }
+        snprintf(section_buf, sizeof(section_buf), "__section__%s", section_key);
         tomap_set(m, section_buf, v);
         return 1;
     }
@@ -448,16 +452,20 @@ static int parse_line(const char* line_in, const char* current_section,
         const char* sec = "";
         {
             char section_buf[1024];
-            sprintf(section_buf, "__section__%s", current_section);
+            if (strlen(current_section) + 11 >= sizeof(section_buf)) return 0;
+            snprintf(section_buf, sizeof(section_buf), "__section__%s", current_section);
             TomlValue* sv = tomap_get(m, section_buf);
             if (sv && sv->s) sec = sv->s;
         }
         if (sec && *sec) {
-            sprintf(full_key, "%s.%s", sec, key_part);
+            if (strlen(sec) + strlen(key_part) + 1 >= sizeof(full_key)) return 0;
+            snprintf(full_key, sizeof(full_key), "%s.%s", sec, key_part);
         } else {
-            sprintf(full_key, "%s.%s", current_section, key_part);
+            if (strlen(current_section) + strlen(key_part) + 1 >= sizeof(full_key)) return 0;
+            snprintf(full_key, sizeof(full_key), "%s.%s", current_section, key_part);
         }
     } else {
+        if (strlen(key_part) >= sizeof(full_key)) return 0;
         strcpy(full_key, key_part);
     }
 
@@ -503,6 +511,22 @@ static int parse_line(const char* line_in, const char* current_section,
  * TOML file parser
  * ============================================================================ */
 
+static int toml_parse_one_line(char* line, char* section, TomlMap* out) {
+    char scratch[4096];
+    const char* p = str_skip_ws(line);
+    if (!*p || *p == '#') return 1;
+    if (parse_line(line, section, out, scratch, sizeof(scratch)) == 0) return 0;
+    if (p[0] == '[') {
+        char* end = strchr(line, ']');
+        if (!end) return 0;
+        *end = '\0';
+        const char* key = str_trim_inplace(line + 1);
+        if (!*key || strlen(key) >= 256) return 0;
+        strcpy(section, key);
+    }
+    return 1;
+}
+
 static int toml_parse_file(FILE* f, TomlMap* out) {
     tomap_init(out);
 
@@ -511,41 +535,54 @@ static int toml_parse_file(FILE* f, TomlMap* out) {
     size_t content_cap = 0;
     size_t content_len = 0;
     char line_buf[4096];
-    char scratch_buf[4096];
     char current_section[256] = {0};
 
     while (fgets(line_buf, (int)sizeof(line_buf), f)) {
         /* strip \r\n */
         size_t ll = strlen(line_buf);
+        if (ll == sizeof(line_buf) - 1 && line_buf[ll - 1] != '\n' && !feof(f)) {
+            tomap_free(out);
+            return 0;
+        }
         while (ll > 0 && (line_buf[ll-1] == '\n' || line_buf[ll-1] == '\r')) {
             line_buf[--ll] = '\0';
         }
 
-        /* skip blank / comment lines */
-        const char* p = str_skip_ws(line_buf);
-        if (!*p || *p == '#') continue;
-
-        int r = parse_line(line_buf, current_section, out, scratch_buf, sizeof(scratch_buf));
-        if (r == 0) {
+        if (!toml_parse_one_line(line_buf, current_section, out)) {
             tomap_free(out);
             return 0;
-        }
-
-        /* track current section */
-        if (p[0] == '[') {
-            char* end_bracket = strchr(line_buf, ']');
-            if (end_bracket) {
-                *end_bracket = '\0';
-                const char* sec = str_trim_inplace(line_buf + 1);
-                if (*sec) {
-                    strncpy(current_section, sec, sizeof(current_section) - 1);
-                    current_section[sizeof(current_section) - 1] = '\0';
-                }
-            }
         }
     }
 
     (void)content; (void)content_cap; (void)content_len; /* unused */
+    if (ferror(f)) {
+        tomap_free(out);
+        return 0;
+    }
+    return 1;
+}
+
+static int toml_parse_buffer(const char* data, size_t size, TomlMap* out) {
+    tomap_init(out);
+    char section[256] = {0};
+    size_t offset = 0;
+    while (offset < size) {
+        const char* end = (const char*)memchr(data + offset, '\n', size - offset);
+        size_t length = end ? (size_t)(end - data - offset) : size - offset;
+        if (length >= 4096 || memchr(data + offset, '\0', length)) {
+            tomap_free(out);
+            return 0;
+        }
+        char line[4096];
+        memcpy(line, data + offset, length);
+        if (length && line[length - 1] == '\r') --length;
+        line[length] = '\0';
+        if (!toml_parse_one_line(line, section, out)) {
+            tomap_free(out);
+            return 0;
+        }
+        offset = end ? (size_t)(end - data) + 1 : size;
+    }
     return 1;
 }
 
@@ -577,6 +614,20 @@ KanoConfig kano_config_create_empty(void) {
     KanoConfig cfg = (KanoConfig)calloc(1, sizeof(struct KanoConfigImpl));
     if (!cfg) return NULL;
     tomap_init(&cfg->data);
+    return cfg;
+}
+
+KANO_CONFIG_API
+KanoConfig kano_config_load_buffer(const char* data, size_t size) {
+    if (!data) return NULL;
+    TomlMap parsed;
+    if (!toml_parse_buffer(data, size, &parsed)) return NULL;
+    KanoConfig cfg = kano_config_create_empty();
+    if (!cfg) {
+        tomap_free(&parsed);
+        return NULL;
+    }
+    cfg->data = parsed;
     return cfg;
 }
 

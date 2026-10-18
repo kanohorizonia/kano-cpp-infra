@@ -8,6 +8,16 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
                      "${CMAKE_CURRENT_BINARY_DIR}/process")
 endif()
 
+if(NOT TARGET KanoInfra::config)
+    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../systems/kano_infra_config"
+                     "${CMAKE_CURRENT_BINARY_DIR}/config")
+endif()
+add_executable(kano_config_buffer_tests config_buffer_tests.cpp)
+target_link_libraries(kano_config_buffer_tests PRIVATE KanoInfra::config KanoInfra::unattended)
+add_test(NAME infra.config_buffer COMMAND kano_config_buffer_tests)
+set_tests_properties(infra.config_buffer PROPERTIES
+    TIMEOUT 30 ENVIRONMENT "KANO_UNATTENDED=1" LABELS "config")
+
 add_executable(kano_unattended_harness unattended_harness.cpp)
 target_link_libraries(kano_unattended_harness PRIVATE KanoInfra::unattended KanoInfra::process)
 
