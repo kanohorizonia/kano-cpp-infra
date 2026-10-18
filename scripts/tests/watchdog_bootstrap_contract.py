@@ -344,13 +344,29 @@ class BootstrapContract(unittest.TestCase):
                             "print(json.dumps({'root':os.getpid(),'child':child,'grandchild':grandchild}),flush=True)\n"
                             + ("os._exit(0)\n" if early_exit else "time.sleep(30)\n"))
                         (code, complete, _, elapsed), buffers = self.run_command(source, 0.3)
-                        self.assertEqual(code, 0 if early_exit else 124)
-                        self.assertTrue(complete)
-                        self.assertLess(elapsed, 0.9)
                         identities = json.loads(buffers[0])
+                        zombies = []
                         for pid in identities.values():
-                            with self.assertRaises(ProcessLookupError):
+                            try:
                                 os.kill(pid, 0)
+                            except ProcessLookupError:
+                                continue
+                            # Container PID 1 may retain killed orphan zombies.
+                            # They explain incomplete cleanup, never a live member.
+                            self.assertEqual(sys.platform, "linux")
+                            try:
+                                state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+                            except FileNotFoundError:
+                                continue
+                            self.assertEqual(state, "Z")
+                            zombies.append(pid)
+                        if zombies:
+                            self.assertFalse(complete)
+                            self.assertEqual(code, 125 if early_exit else 124)
+                        else:
+                            self.assertTrue(complete)
+                            self.assertEqual(code, 0 if early_exit else 124)
+                        self.assertLess(elapsed, 0.9)
                         self.assertIsNone(sentinel.poll())
         finally:
             sentinel.terminate()

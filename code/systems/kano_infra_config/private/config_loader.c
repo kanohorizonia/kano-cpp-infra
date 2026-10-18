@@ -540,9 +540,13 @@ static int toml_parse_file(FILE* f, TomlMap* out) {
     while (fgets(line_buf, (int)sizeof(line_buf), f)) {
         /* strip \r\n */
         size_t ll = strlen(line_buf);
-        if (ll == sizeof(line_buf) - 1 && line_buf[ll - 1] != '\n' && !feof(f)) {
-            tomap_free(out);
-            return 0;
+        if (ll == sizeof(line_buf) - 1 && line_buf[ll - 1] != '\n') {
+            /* A full buffer may end exactly at EOF or just before its LF. */
+            const int next = fgetc(f);
+            if ((next != EOF && next != '\n') || ferror(f)) {
+                tomap_free(out);
+                return 0;
+            }
         }
         while (ll > 0 && (line_buf[ll-1] == '\n' || line_buf[ll-1] == '\r')) {
             line_buf[--ll] = '\0';

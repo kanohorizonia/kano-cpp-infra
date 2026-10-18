@@ -54,6 +54,18 @@ int main() {
         std::filesystem::remove(path);
         Check(fileConfig && kano_config_get_int(fileConfig.get(), "version", &version) && version == 1,
               "Existing file-backed config API must remain usable");
+        for (const size_t length : {4094u, 4095u, 4096u}) {
+            for (const bool newline : {false, true}) {
+                const std::string content = "#" + std::string(length - 1, 'x') + (newline ? "\n" : "");
+                { std::ofstream stream(path, std::ios::binary); stream << content; }
+                const Config fromFile(kano_config_load(path.string().c_str()), &kano_config_free);
+                const auto fromBuffer = Parse(content);
+                std::filesystem::remove(path);
+                Check(static_cast<bool>(fromFile) == (length < 4096), "File line boundary differs from its limit");
+                Check(static_cast<bool>(fromFile) == static_cast<bool>(fromBuffer),
+                      "File and buffer line boundaries must agree at EOF and LF");
+            }
+        }
         std::cout << "Shared immutable config buffer: PASS\n";
         return 0;
     } catch (const std::exception& error) {
