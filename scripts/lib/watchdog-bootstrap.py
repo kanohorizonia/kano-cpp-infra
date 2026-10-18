@@ -6,6 +6,7 @@ POSIX containment covers the owned process group, not escaped sessions.
 """
 import argparse
 import ctypes
+import errno
 import os
 import selectors
 import shutil
@@ -62,10 +63,67 @@ def retain(buffers, stream, data):
     return len(data) > remaining
 
 
+class DarwinSigval(ctypes.Union):
+    _fields_ = [("integer", ctypes.c_int32), ("pointer", ctypes.c_void_p)]
+
+
+class DarwinSiginfo(ctypes.Structure):
+    # Darwin's public 64-bit siginfo_t, including all kernel-written padding.
+    # See xnu/bsd/sys/signal.h; use fixed-width Darwin long fields so the ABI
+    # contract can also be checked by fixtures on a Windows development host.
+    _fields_ = [("signo", ctypes.c_int32), ("error", ctypes.c_int32),
+                ("code", ctypes.c_int32), ("pid", ctypes.c_int32),
+                ("uid", ctypes.c_uint32), ("status", ctypes.c_int32),
+                ("address", ctypes.c_void_p), ("value", DarwinSigval),
+                ("band", ctypes.c_int64), ("padding", ctypes.c_uint64 * 7)]
+
+
+def darwin_exit_observer():
+    # CPython <=3.12 omits os.waitid on Apple, although libc supports it.
+    # Resolve and validate before spawning: unsupported ABIs fail closed.
+    if (sys.platform != "darwin" or ctypes.sizeof(ctypes.c_void_p) != 8
+            or ctypes.sizeof(DarwinSiginfo) != 104
+            or ctypes.alignment(DarwinSiginfo) != 8
+            or DarwinSiginfo.pid.offset != 12 or DarwinSiginfo.status.offset != 20):
+        raise RuntimeError("POSIX bootstrap requires a supported non-reaping waitid ABI")
+    library = ctypes.CDLL(None, use_errno=True)
+    try:
+        waitid = library.waitid
+    except AttributeError as error:
+        raise RuntimeError("Darwin bootstrap requires libc waitid(WNOWAIT)") from error
+    waitid.argtypes = [ctypes.c_int, ctypes.c_uint32, ctypes.POINTER(DarwinSiginfo), ctypes.c_int]
+    waitid.restype = ctypes.c_int
+
+    def observe(pid):
+        info = DarwinSiginfo()
+        # Darwin sys/wait.h: P_PID=1, WEXITED=4, WNOHANG=1, WNOWAIT=32.
+        if waitid(1, pid, ctypes.byref(info), 4 | 1 | 32) != 0:
+            error = ctypes.get_errno()
+            if error == errno.EINTR:
+                return None
+            raise OSError(error, os.strerror(error))
+        if info.pid == 0:
+            return None
+        if info.pid != pid:
+            raise RuntimeError("Darwin waitid returned an unexpected process identity")
+        return info.status if info.code == 1 else -info.status  # CLD_EXITED=1
+
+    return observe
+
+
+def posix_exit_observer():
+    required = ("waitid", "P_PID", "WEXITED", "WNOHANG", "WNOWAIT", "CLD_EXITED")
+    if all(hasattr(os, name) for name in required):
+        def observe(pid):
+            info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            return None if info is None else (info.si_status if info.si_code == os.CLD_EXITED else -info.si_status)
+        return observe
+    return darwin_exit_observer()
+
+
 def run_posix(command, timeout, cleanup, buffers):
     start = time.monotonic()
-    if not hasattr(os, "waitid") or not hasattr(os, "WNOWAIT"):
-        raise RuntimeError("POSIX bootstrap requires waitid(WNOWAIT) to reserve the owned process-group leader")
+    observe_exit = posix_exit_observer()
     process = None
     selector = None
     cleanup_verified = False
@@ -83,6 +141,33 @@ def run_posix(command, timeout, cleanup, buffers):
             return True
         except ProcessLookupError:
             return False
+        except PermissionError:
+            if sys.platform == "darwin":
+                # Darwin also reports EPERM for a zombie-only group. This
+                # remains nonempty until a later probe proves ESRCH.
+                return True
+            raise
+
+    def signal_reserved_group():
+        nonlocal exit_code, group_terminated
+        # Record the attempt even on failure: no group signal may follow reap.
+        group_terminated = True
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            if sys.platform == "darwin" and exit_code is None:
+                # The leader can exit after the last peek or during setup.
+                # Re-observe while its exact PID is still reserved.
+                exit_code = observe_exit(process.pid)
+            if sys.platform != "darwin" or exit_code is None:
+                raise
+            # A non-reaping observation proved the leader exited. Darwin
+            # filters zombies when signaling groups and may return EPERM.
+            # Defer that error, reap only this reserved leader, then require
+            # ESRCH plus pipe EOF. Denied live descendants cannot pass cleanup.
+            # Never signal this group again after releasing the leader PID.
 
     try:
         # Setup belongs to the ownership scope too: selector or nonblocking
@@ -99,16 +184,11 @@ def run_posix(command, timeout, cleanup, buffers):
                 # Observe completion while reserving the leader PID. Reaping
                 # before killpg could let the OS recycle it into an unrelated
                 # process group during early-parent-exit cleanup.
-                observed = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-                if observed is not None:
-                    exit_code = observed.si_status if observed.si_code == os.CLD_EXITED else -observed.si_status
+                exit_code = observe_exit(process.pid)
             if cleanup_deadline is None and (now >= deadline or exit_code is not None):
                 timed_out = now >= deadline
                 cleanup_deadline = now + cleanup
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                signal_reserved_group()
                 group_terminated = True
             if group_terminated and not root_reaped:
                 try:
@@ -141,23 +221,21 @@ def run_posix(command, timeout, cleanup, buffers):
                 if pipe is not None and not pipe.closed:
                     pipe.close()
             if not cleanup_verified:
-                if not group_terminated:
-                    # The root is still unreaped on every setup failure. Send
-                    # only one group kill before releasing that reserved PID.
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    group_terminated = True
                 # Setup failures receive one finite cleanup budget; ordinary
                 # timeout paths retain their existing shared cleanup deadline.
                 final_deadline = cleanup_deadline if cleanup_deadline is not None else time.monotonic() + cleanup
                 try:
-                    process.wait(timeout=max(0, final_deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
-                    pass
-                while time.monotonic() < final_deadline and group_alive():
-                    time.sleep(0.01)
+                    if not group_terminated:
+                        # Signal only while the exact leader remains reserved.
+                        signal_reserved_group()
+                finally:
+                    # A signaling/observer error must not skip bounded reap.
+                    try:
+                        process.wait(timeout=max(0, final_deadline - time.monotonic()))
+                    except subprocess.TimeoutExpired:
+                        pass
+                    while time.monotonic() < final_deadline and group_alive():
+                        time.sleep(0.01)
 
 
 def run_windows(command, timeout, cleanup, buffers):

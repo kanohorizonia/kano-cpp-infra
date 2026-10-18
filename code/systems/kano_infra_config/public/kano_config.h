@@ -60,6 +60,13 @@ KanoConfig kano_config_create_empty(void);
 KanoConfig kano_config_load(const char* filepath);
 
 /**
+ * Parse an immutable, length-delimited TOML snapshot without filesystem access.
+ * Input bytes are not retained. Embedded NULs and overlong lines/keys fail.
+ * The result has no source path: reload returns false; free normally.
+ */
+KanoConfig kano_config_load_buffer(const char* data, size_t size);
+
+/**
  * Reload from the same filepath. Returns false on failure; config unchanged.
  */
 bool kano_config_reload(KanoConfig cfg);

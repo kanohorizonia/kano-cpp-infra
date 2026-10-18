@@ -214,6 +214,9 @@ void kano_process_free_unattended_result(KanoUnattendedProcessResult* result);
 #ifdef KANO_PROCESS_TESTING
 /* Deterministic test-only injection; absent from production builds. */
 void kano_process_test_fail_next_containment_setup(void);
+/* Session test: report failed-launch cleanup as unconfirmed only after its
+ * owned suspended child was actually confirmed stopped. No production symbol. */
+void kano_process_test_fail_next_launch_cleanup_confirmation(void);
 #endif
 
 /* ---------------------------------------------------------------------------
