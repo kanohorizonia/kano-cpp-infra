@@ -151,6 +151,47 @@ the independent DLL CRT. The parent harness requires expected status, diagnostic
 nonzero failure, positive deadlines, containment, and completed cleanup. Each
 consumer still requires its own startup/adoption verification on supported hosts.
 
+### Persistent contained child sessions
+
+`KanoInfra::process` also exports the C++17 `<kano_process_session.hpp>` facade for a resident
+child protocol. `kano::process::Session` has no lifetime timer. `Start`, `Write`,
+`Poll`, and `Stop` use separate monotonic operation budgets. The caller owns
+readiness, request framing, graceful shutdown, and request deadlines. `Poll`
+returns incremental binary-safe chunks; `Write` can also return chunks drained
+while input is blocked. Both streams have independent per-operation retention
+limits and continue draining after truncation. Protocol consumers must reject
+truncated protocol output. An empty environment override removes an inherited
+key; overrides affect only the launched child.
+
+On Windows, launch reuses the strict process foundation: the suspended child
+cannot execute until assignment to a kill-on-close Job succeeds. Only its three
+standard I/O handles are inherited. Closing or abruptly losing the owner kills
+the contained descendants. `Stop` kills only that owned Job and confirms the
+root, observed members, capture writers, and pending input cancellation have
+finished before reporting `cleanup_complete`. Unconfirmed cleanup is failure;
+the caller must preserve its ownership record. A failed launch with unconfirmed
+cleanup leaves the Session permanently unverified: later empty `Stop`/`Close`
+cannot claim success, and `Start` refuses reuse. The destructor makes a bounded
+cleanup attempt and then closes owned handles. Kernel launch/cancellation and
+host scheduling can overrun budgets. An OS cancellation that never completes
+retains at most one 64 KiB input buffer/event to prevent use-after-free and is
+reported as incomplete cleanup.
+
+`Identity` records PID, creation token, and executable image. `QueryIdentity`,
+`CurrentIdentity`, and `IsAlive` validate exact live identities without offering
+a kill-by-PID operation. `LaunchDetached` starts an independent immediate child
+without inherited handles or a new per-launch Job; it survives its immediate
+caller's exit and retains any OS-imposed ancestor Job boundary. The detached
+program must own its own workers. These additive APIs currently support
+Windows only and return explicit unsupported errors elsewhere. Existing
+cross-platform one-shot process APIs are unchanged.
+
+The focused `infra.process_session` test covers protocol I/O, EOF, blocked
+input, noisy stderr, failed launch/containment, exact identity, owned descendant
+cleanup, abrupt owner death, and detached caller exit. Consumers may set
+`KANO_PROCESS_SESSION_TEST_LABELS` before adding `code/tests/process_session`
+to include this contract in a focused gate.
+
 ## Tooling
 
 Kano projects use Pixi for repeatable developer tooling and CMake/Ninja for the

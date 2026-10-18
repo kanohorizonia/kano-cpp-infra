@@ -20,6 +20,7 @@
 #endif
 
 #include "kano_process.h"
+#include "kano_process_session.hpp"
 
 struct KanoProcessImpl {
     char* executable;
@@ -50,8 +51,12 @@ void kano_process_free(KanoProcess proc);
 
 #ifdef KANO_PROCESS_TESTING
 static bool kano_process_fail_containment_setup = false;
+static bool kano_process_fail_launch_cleanup_confirmation = false;
 void kano_process_test_fail_next_containment_setup(void) {
     kano_process_fail_containment_setup = true;
+}
+void kano_process_test_fail_next_launch_cleanup_confirmation(void) {
+    kano_process_fail_launch_cleanup_confirmation = true;
 }
 #endif
 
@@ -64,6 +69,51 @@ static bool kano_process_injected_containment_failure(void) {
     return false;
 #endif
 }
+
+#ifdef _WIN32
+struct KanoProcessSessionLaunch {
+    HANDLE stdin_read;
+    const wchar_t* environment;
+    const wchar_t* executable;
+    wchar_t* command_line;
+    const wchar_t* working_dir;
+};
+
+static BOOL kano_process_create_session_child(KanoProcessSessionLaunch* launch,
+                                               HANDLE stdout_write, HANDLE stderr_write,
+                                               PROCESS_INFORMATION* process_info) {
+    STARTUPINFOEXW startup = {};
+    startup.StartupInfo.cb = sizeof(startup);
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = launch->stdin_read;
+    startup.StartupInfo.hStdOutput = stdout_write;
+    startup.StartupInfo.hStdError = stderr_write;
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &size);
+    startup.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(size);
+    if (!startup.lpAttributeList) { SetLastError(ERROR_OUTOFMEMORY); return FALSE; }
+    if (!InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &size)) {
+        const DWORD error = GetLastError();
+        free(startup.lpAttributeList);
+        SetLastError(error);
+        return FALSE;
+    }
+    HANDLE inherited[] = {launch->stdin_read, stdout_write, stderr_write};
+    BOOL ok = UpdateProcThreadAttribute(startup.lpAttributeList, 0,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), NULL, NULL);
+    if (ok) {
+        ok = CreateProcessW(launch->executable, launch->command_line, NULL, NULL, TRUE,
+            CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT |
+                EXTENDED_STARTUPINFO_PRESENT,
+            (void*)launch->environment, launch->working_dir, &startup.StartupInfo, process_info);
+    }
+    const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+    DeleteProcThreadAttributeList(startup.lpAttributeList);
+    free(startup.lpAttributeList);
+    SetLastError(error);
+    return ok;
+}
+#endif
 
 static void kano_process_strict_error(KanoUnattendedProcessResult* result,
                                       KanoUnattendedProcessStatus status,
@@ -692,7 +742,11 @@ KanoProcess kano_process_spawn(const char* executable, const char* working_dir, 
 static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options,
                                                KanoUnattendedProcessResult* strict_result,
                                                long long deadline_ms,
-                                               int cleanup_timeout_ms) {
+                                               int cleanup_timeout_ms
+#ifdef _WIN32
+                                               , KanoProcessSessionLaunch* session_launch = NULL
+#endif
+                                               ) {
     KanoProcess proc = kano_process_alloc(options);
     if (!proc) {
         kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, 0);
@@ -749,7 +803,8 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
             si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         }
 
-        ok = CreateProcessA(
+        ok = session_launch ? kano_process_create_session_child(session_launch,
+            stdout_write, stderr_write, &proc->process_info) : CreateProcessA(
             NULL,
             proc->cmdline,
             NULL,
@@ -1592,3 +1647,5 @@ bool kano_process_terminate(KanoProcess proc) {
     return kano_process_signal_owned_tree(proc, SIGTERM);
 #endif
 }
+
+#include "process_session_impl.inl"

@@ -129,7 +129,7 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/unattended_process/unattended_process_test.
     target_compile_definitions(kano_unattended_process_test_impl PRIVATE KANO_PROCESS_TESTING)
     target_include_directories(kano_unattended_process_test_impl PUBLIC
         "${CMAKE_CURRENT_LIST_DIR}/../systems/kano_infra_process/public")
-    target_compile_features(kano_unattended_process_test_impl PRIVATE cxx_std_11)
+    target_compile_features(kano_unattended_process_test_impl PRIVATE cxx_std_17)
     add_executable(kano_unattended_process_child unattended_process/unattended_process_child.cpp)
     target_link_libraries(kano_unattended_process_child PRIVATE KanoInfra::unattended)
     add_executable(kano_unattended_process_test unattended_process/unattended_process_test.cpp)
@@ -142,4 +142,5 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/unattended_process/unattended_process_test.
     set_property(TEST unattended.process_contract PROPERTY TIMEOUT 15)
 endif()
 
+add_subdirectory(process_session)
 kano_infra_finalize_test_timeouts(10)
