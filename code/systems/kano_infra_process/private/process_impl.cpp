@@ -1457,6 +1457,9 @@ static void kano_process_wait_unattended(KanoProcess proc,
     bool root_reaped = false;
     bool cleanup_started = false;
     bool containment_empty = false;
+#if defined(__APPLE__)
+    bool group_probe_denied = false;
+#endif
     long long cleanup_deadline = 0;
 #ifdef _WIN32
     HANDLE member_handles[kano_process_max_cleanup_handles] = {};
@@ -1546,7 +1549,16 @@ static void kano_process_wait_unattended(KanoProcess proc,
             if (root_reaped) {
                 if (kill(-proc->process_group, 0) != 0) {
                     if (errno == ESRCH) containment_empty = true;
-                    else kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, errno);
+                    else {
+#if defined(__APPLE__)
+                        /* Darwin excludes zombies from group probes. EPERM
+                         * remains nonempty until ESRCH proves disappearance;
+                         * a denied live member still fails the finite deadline. */
+                        if (errno == EPERM) group_probe_denied = true;
+                        else
+#endif
+                            kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, errno);
+                    }
                 }
             }
 #endif
@@ -1558,7 +1570,13 @@ static void kano_process_wait_unattended(KanoProcess proc,
                 return;
             }
             if (kano_process_now_ms() >= cleanup_deadline) {
-                kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED, 0);
+                kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CLEANUP_FAILED,
+#if defined(__APPLE__)
+                                          group_probe_denied ? EPERM : 0
+#else
+                                          0
+#endif
+                );
 #ifdef _WIN32
                 for (size_t i = 0; i < member_count; ++i) CloseHandle(member_handles[i]);
 #endif
