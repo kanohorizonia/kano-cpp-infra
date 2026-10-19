@@ -1347,6 +1347,29 @@ bool kano_process_run_ex_v2(const KanoProcessOptions* options,
     return ok;
 }
 
+#ifdef KANO_PROCESS_TESTING
+/* Single-threaded scripted syscall source: one short read leaves the final
+ * budget smaller than a buffer while more input remains available. */
+struct KanoProcessStrictReadTestSource {
+    KanoProcessStrictReadTestStats stats;
+};
+static KanoProcessStrictReadTestSource* kano_process_strict_read_test_source = NULL;
+static size_t kano_process_strict_test_read(char* buffer, size_t requested) {
+    KanoProcessStrictReadTestStats* stats = &kano_process_strict_read_test_source->stats;
+    const size_t fragment = stats->read_calls ? 8192 : 8191;
+    size_t count = requested < fragment ? requested : fragment;
+    if (count > stats->bytes_remaining) count = stats->bytes_remaining;
+    if (!stats->read_calls) stats->first_request = requested;
+    stats->last_request = requested;
+    if (requested > stats->largest_request) stats->largest_request = requested;
+    ++stats->read_calls;
+    stats->bytes_read += count;
+    stats->bytes_remaining -= count;
+    memset(buffer, 'r', count);
+    return count;
+}
+#endif
+
 /* Strict capture has one owner and never calls client code or reader threads. */
 static bool kano_process_strict_read(KanoProcess proc, bool stderr_stream,
                                      const KanoProcessCaptureLimitsV2* limits,
@@ -1362,8 +1385,18 @@ static bool kano_process_strict_read(KanoProcess proc, bool stderr_stream,
     while (remaining_budget > 0) {
 #ifdef _WIN32
         HANDLE* handle = stderr_stream ? &proc->stderr_read : &proc->stdout_read;
+#ifdef KANO_PROCESS_TESTING
+        if (!*handle && !kano_process_strict_read_test_source) return true;
+#else
         if (!*handle) return true;
+#endif
         DWORD available = 0;
+#ifdef KANO_PROCESS_TESTING
+        if (kano_process_strict_read_test_source) {
+            const KanoProcessStrictReadTestStats* stats = &kano_process_strict_read_test_source->stats;
+            available = (DWORD)(stats->read_calls ? stats->bytes_remaining : 8191);
+        } else
+#endif
         if (!PeekNamedPipe(*handle, NULL, 0, NULL, &available, NULL)) {
             const DWORD error = GetLastError();
             CloseHandle(*handle);
@@ -1374,7 +1407,13 @@ static bool kano_process_strict_read(KanoProcess proc, bool stderr_stream,
         }
         if (!available) return true;
         DWORD count = 0;
-        const DWORD requested = available < sizeof(buffer) ? available : (DWORD)sizeof(buffer);
+        const size_t budgeted = remaining_budget < sizeof(buffer) ? remaining_budget : sizeof(buffer);
+        const DWORD requested = available < budgeted ? available : (DWORD)budgeted;
+#ifdef KANO_PROCESS_TESTING
+        if (kano_process_strict_read_test_source) {
+            count = (DWORD)kano_process_strict_test_read(buffer, requested);
+        } else
+#endif
         if (!ReadFile(*handle, buffer, requested, &count, NULL) || !count) {
             const DWORD error = GetLastError();
             kano_process_strict_error(result, KANO_UNATTENDED_PROCESS_CAPTURE_FAILED, error);
@@ -1382,8 +1421,17 @@ static bool kano_process_strict_read(KanoProcess proc, bool stderr_stream,
         }
 #else
         int* fd = stderr_stream ? &proc->stderr_fd : &proc->stdout_fd;
+#ifdef KANO_PROCESS_TESTING
+        if (*fd < 0 && !kano_process_strict_read_test_source) return true;
+#else
         if (*fd < 0) return true;
-        const ssize_t count = read(*fd, buffer, sizeof(buffer));
+#endif
+        const size_t requested = remaining_budget < sizeof(buffer) ? remaining_budget : sizeof(buffer);
+        const ssize_t count =
+#ifdef KANO_PROCESS_TESTING
+            kano_process_strict_read_test_source ? (ssize_t)kano_process_strict_test_read(buffer, requested) :
+#endif
+            read(*fd, buffer, requested);
         if (count == 0) { close(*fd); *fd = -1; return true; }
         if (count < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return true;
@@ -1400,6 +1448,29 @@ static bool kano_process_strict_read(KanoProcess proc, bool stderr_stream,
     }
     return true;
 }
+
+#ifdef KANO_PROCESS_TESTING
+bool kano_process_test_strict_fragmented_read(bool stderr_stream,
+                                             const KanoProcessCaptureLimitsV2* limits,
+                                             KanoUnattendedProcessResult* result,
+                                             KanoProcessStrictReadTestStats* stats) {
+    if (!limits || !result || !stats || kano_process_strict_read_test_source) return false;
+    KanoProcessImpl proc = {};
+#ifndef _WIN32
+    proc.stdout_fd = proc.stderr_fd = -1;
+#endif
+    memset(result, 0, sizeof(*result));
+    result->status = KANO_UNATTENDED_PROCESS_COMPLETED;
+    KanoProcessStrictReadTestSource source = {};
+    source.stats.bytes_remaining = 8191 + 8 * 8192;
+    kano_process_strict_read_test_source = &source;
+    bool made_progress = false;
+    const bool ok = kano_process_strict_read(&proc, stderr_stream, limits, result, &made_progress);
+    kano_process_strict_read_test_source = NULL;
+    *stats = source.stats;
+    return ok && made_progress;
+}
+#endif
 
 static bool kano_process_strict_pipes_closed(KanoProcess proc) {
 #ifdef _WIN32

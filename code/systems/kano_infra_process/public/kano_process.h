@@ -217,6 +217,20 @@ void kano_process_test_fail_next_containment_setup(void);
 /* Session test: report failed-launch cleanup as unconfirmed only after its
  * owned suspended child was actually confirmed stopped. No production symbol. */
 void kano_process_test_fail_next_launch_cleanup_confirmation(void);
+typedef struct KanoProcessStrictReadTestStats {
+    size_t bytes_read;
+    size_t bytes_remaining;
+    size_t read_calls;
+    size_t first_request;
+    size_t last_request;
+    size_t largest_request;
+} KanoProcessStrictReadTestStats;
+/* Exercise the actual strict reader with a scripted short first read followed
+ * by full-buffer fragments. This syscall seam exists only in test builds. */
+bool kano_process_test_strict_fragmented_read(bool stderr_stream,
+                                             const KanoProcessCaptureLimitsV2* limits,
+                                             KanoUnattendedProcessResult* result,
+                                             KanoProcessStrictReadTestStats* stats);
 #endif
 
 /* ---------------------------------------------------------------------------
