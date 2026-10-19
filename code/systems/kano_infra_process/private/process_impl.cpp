@@ -17,6 +17,7 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <mutex>
 #endif
 
 #include "kano_process.h"
@@ -430,10 +431,58 @@ static void kano_process_close_reader_handles(HANDLE* readers) {
 
 #else
 
+struct KanoProcessSessionLaunch {
+    int stdin_read;
+    char* const* environment;
+};
+
+/* Serialize owned pipe creation/CLOEXEC and fork. Children exec/_exit without
+ * touching the inherited lock; parents release it before waiting for setup. */
+static std::mutex kano_process_spawn_mutex;
+
+static bool kano_process_cloexec_pipe(int endpoints[2]) {
+    if (pipe(endpoints) != 0) return false;
+    int error = 0;
+    for (int index = 0; index < 2; ++index) {
+        // A caller may have closed any standard descriptor. Keep every owned
+        // endpoint above stderr so child dup2 always clears CLOEXEC and closing
+        // original pipe ends cannot close or collide with remapped stdio.
+        if (endpoints[index] <= STDERR_FILENO) {
+            const int relocated = fcntl(endpoints[index], F_DUPFD, STDERR_FILENO + 1);
+            if (relocated < 0) { error = errno; break; }
+            close(endpoints[index]);
+            endpoints[index] = relocated;
+        }
+        const int flags = fcntl(endpoints[index], F_GETFD, 0);
+        if (flags < 0 || fcntl(endpoints[index], F_SETFD, flags | FD_CLOEXEC) != 0) {
+            error = errno;
+            break;
+        }
+    }
+    if (error) {
+        close(endpoints[0]); close(endpoints[1]);
+        endpoints[0] = endpoints[1] = -1;
+        errno = error;
+        return false;
+    }
+    return true;
+}
+
 static long long kano_process_now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ((long long)ts.tv_sec * 1000LL) + (ts.tv_nsec / 1000000LL);
+}
+
+static bool kano_process_lock_spawn(std::unique_lock<std::mutex>& lock, long long deadline_ms) {
+    while (!lock.try_lock()) {
+        if (deadline_ms > 0 && kano_process_now_ms() >= deadline_ms) {
+            errno = ETIMEDOUT;
+            return false;
+        }
+        (void)poll(NULL, 0, 1);
+    }
+    return true;
 }
 
 static char** kano_process_build_exec_argv(KanoProcess proc) {
@@ -742,10 +791,8 @@ KanoProcess kano_process_spawn(const char* executable, const char* working_dir, 
 static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options,
                                                KanoUnattendedProcessResult* strict_result,
                                                long long deadline_ms,
-                                               int cleanup_timeout_ms
-#ifdef _WIN32
-                                               , KanoProcessSessionLaunch* session_launch = NULL
-#endif
+                                               int cleanup_timeout_ms,
+                                               KanoProcessSessionLaunch* session_launch = NULL
                                                ) {
     KanoProcess proc = kano_process_alloc(options);
     if (!proc) {
@@ -889,6 +936,16 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
     }
 #else
     {
+        std::unique_lock<std::mutex> spawn_lock(kano_process_spawn_mutex, std::defer_lock);
+        if (!kano_process_lock_spawn(spawn_lock, strict_result ? deadline_ms : 0)) {
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_TIMED_OUT, errno);
+            if (strict_result) {
+                strict_result->process.timed_out = true;
+                strict_result->process.exit_code = 124;
+            }
+            kano_process_free(proc);
+            return NULL;
+        }
         char** argv = kano_process_build_exec_argv(proc);
         int stdout_pipe[2] = {-1, -1};
         int stderr_pipe[2] = {-1, -1};
@@ -903,7 +960,7 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
         }
 
         if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
-            if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
+            if (!kano_process_cloexec_pipe(stdout_pipe) || !kano_process_cloexec_pipe(stderr_pipe)) {
                 kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno);
                 if (stdout_pipe[0] >= 0) close(stdout_pipe[0]);
                 if (stdout_pipe[1] >= 0) close(stdout_pipe[1]);
@@ -915,8 +972,7 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
             }
         }
 
-        if (strict_result && (pipe(setup_pipe) != 0 ||
-            fcntl(setup_pipe[1], F_SETFD, FD_CLOEXEC) != 0 ||
+        if (strict_result && (!kano_process_cloexec_pipe(setup_pipe) ||
             !kano_process_make_nonblocking(setup_pipe[0]))) {
             kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno);
             if (setup_pipe[0] >= 0) close(setup_pipe[0]);
@@ -976,6 +1032,14 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
                 }
                 _exit(127);
             }
+            if (session_launch) {
+                if (dup2(session_launch->stdin_read, STDIN_FILENO) < 0) {
+                    int failure[2] = {KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno};
+                    (void)write(setup_pipe[1], failure, sizeof(failure));
+                    _exit(127);
+                }
+                if (session_launch->stdin_read != STDIN_FILENO) close(session_launch->stdin_read);
+            }
             if (proc->mode == KANO_PROCESS_MODE_CAPTURE) {
                 close(stdout_pipe[0]);
                 close(stderr_pipe[0]);
@@ -989,7 +1053,8 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
                 close(stdout_pipe[1]);
                 close(stderr_pipe[1]);
             }
-            execvp(proc->executable, argv);
+            if (session_launch) execve(proc->executable, argv, session_launch->environment);
+            else execvp(proc->executable, argv);
             if (strict_result) {
                 int failure[2] = {KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, errno};
                 (void)write(setup_pipe[1], failure, sizeof(failure));
@@ -1028,6 +1093,7 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
 
         if (strict_result) {
             close(setup_pipe[1]);
+            spawn_lock.unlock();
             int failure[2] = {0, 0};
             bool setup_complete = false;
             while (strict_result->status == KANO_UNATTENDED_PROCESS_COMPLETED) {
@@ -1077,7 +1143,7 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
                 return NULL;
             }
             strict_result->containment = KANO_PROCESS_CONTAINMENT_POSIX_GROUP;
-        }
+        } else spawn_lock.unlock();
 
         return proc;
     }

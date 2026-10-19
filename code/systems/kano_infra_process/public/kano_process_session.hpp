@@ -21,6 +21,7 @@ struct SessionOptions {
     std::string working_dir;
     std::vector<std::string> arguments; // excludes executable
     // Inherited environment plus overrides; an empty value removes a key.
+    // Keys are case-insensitive on Windows and case-sensitive on POSIX.
     std::vector<std::pair<std::string, std::string>> environment;
     int startup_timeout_ms = 10000;
     int cleanup_timeout_ms = 5000;
@@ -45,7 +46,10 @@ struct SessionResult {
 // budgets are monotonic; kernel calls/scheduling can exceed a requested budget.
 // Windows: child is suspended until a kill-on-close Job owns it. Child stdin,
 // stdout and stderr are the only inherited handles. Owner death kills the Job.
-// Other platforms currently fail explicitly without creating a child.
+// POSIX: executable is an absolute UTF-8 path; argv/cwd/environment pass as
+// exact UTF-8 bytes through execve. A process group owns non-escaping children.
+// Poll observes exit without reaping; Stop signals before reaping the root.
+// The caller must retain normal SIGCHLD wait ownership for the Session.
 class Session {
 public:
     Session();
@@ -68,8 +72,10 @@ public:
     // when output, EOF, process exit, or the operation deadline is observed.
     SessionResult Poll(int InTimeoutMs = 0);
     bool IsRunning() const;
+    // POSIX reports the owned PID/executable with creation_time=0; general
+    // QueryIdentity/IsAlive remain Windows-only and cannot validate that token.
     Identity GetIdentity() const;
-    // Immediately terminates only the owned Job and confirms its members,
+    // Immediately terminates only the owned Job/group and confirms its members,
     // root and capture writers have stopped within the cleanup budget.
     SessionResult Stop(int InTimeoutMs);
     SessionResult Close();

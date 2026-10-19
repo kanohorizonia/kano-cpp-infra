@@ -11,6 +11,10 @@ target_compile_definitions(kano_process_session_test_impl PRIVATE KANO_PROCESS_T
 target_compile_features(kano_process_session_test_impl PUBLIC cxx_std_17)
 target_include_directories(kano_process_session_test_impl PUBLIC
     "${CMAKE_CURRENT_LIST_DIR}/../../systems/kano_infra_process/public")
+if(NOT WIN32)
+    find_package(Threads REQUIRED)
+    target_link_libraries(kano_process_session_test_impl PUBLIC Threads::Threads)
+endif()
 add_executable(kano_process_session_child process_session_child.cpp)
 target_link_libraries(kano_process_session_child PRIVATE kano_process_session_test_impl KanoInfra::unattended)
 add_executable(kano_process_session_tests process_session_tests.cpp)
