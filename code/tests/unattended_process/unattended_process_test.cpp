@@ -93,8 +93,42 @@ static size_t CheckCapturedProcessesStopped(const KanoUnattendedProcessResult& r
     return unique_pids.size();
 }
 
+static void CheckFragmentedReadBudget(bool stderr_stream, size_t capture_limit) {
+    const KanoProcessCaptureLimitsV2 limits{capture_limit, capture_limit};
+    KanoUnattendedProcessResult result{};
+    KanoProcessStrictReadTestStats stats{};
+    Check(kano_process_test_strict_fragmented_read(stderr_stream, &limits, &result, &stats),
+          "scripted fragments traverse the strict reader");
+    std::printf("fragmented stream=%s limit=%zu drained=%zu pending=%zu calls=%zu last_request=%zu\n",
+        stderr_stream ? "stderr" : "stdout", capture_limit, stats.bytes_read,
+        stats.bytes_remaining, stats.read_calls, stats.last_request);
+    Check(stats.bytes_read == 65536 && stats.bytes_remaining == 8191,
+          "one drain preserves its original finite byte budget");
+    Check(stats.read_calls == 9 && stats.last_request == 1 && stats.largest_request == 8192,
+          "short fragment caps the final request to the remaining byte");
+#ifdef _WIN32
+    Check(stats.first_request == 8191, "Windows request is capped by available input");
+#else
+    Check(stats.first_request == 8192, "POSIX short read starts with a buffer-sized request");
+#endif
+    const size_t captured_size = stderr_stream ? result.process.stderr_size : result.process.stdout_size;
+    const char* captured = stderr_stream ? result.process.stderr_data : result.process.stdout_data;
+    const bool truncated = stderr_stream ? result.process.stderr_truncated : result.process.stdout_truncated;
+    const size_t expected_size = capture_limit < 65536 ? capture_limit : 65536;
+    Check(captured_size == expected_size && captured && captured[0] == 'r' &&
+          captured[captured_size - 1] == 'r', "fragmented bytes respect the capture limit");
+    Check(truncated == (capture_limit < 65536), "fragmented capture truncation is reported");
+    Check((stderr_stream ? result.process.stdout_size : result.process.stderr_size) == 0,
+          "strict reader retains bytes only in the selected stream");
+    kano_process_free_unattended_result(&result);
+}
+
 int main() {
     kano::infra::ConfigureUnattendedExecution();
+    for (const bool stderr_stream : {false, true}) {
+        CheckFragmentedReadBudget(stderr_stream, 70000);
+        CheckFragmentedReadBudget(stderr_stream, 512);
+    }
     KanoUnattendedProcessResult result{};
     KanoUnattendedProcessOptions invalid{};
     Check(!kano_process_run_unattended(&invalid, &result), "empty options rejected");
