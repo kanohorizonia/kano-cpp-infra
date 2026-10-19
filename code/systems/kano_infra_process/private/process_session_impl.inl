@@ -2,6 +2,14 @@
 #include <map>
 #include <limits>
 #include <vector>
+#ifndef _WIN32
+#include <pthread.h>
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#else
+extern char** environ;
+#endif
+#endif
 
 namespace kano::process {
 
@@ -23,10 +31,45 @@ struct Session::Impl {
         if (!input_active && pending && WaitForSingleObject(pending->operation.hEvent, 0) == WAIT_OBJECT_0)
             pending.reset();
     }
+#else
+    int input = -1;
+    bool root_reaped = false;
+    bool termination_requested = false;
+    bool ownership_lost = false;
+    bool containment_empty = false;
+    int exit_code = -1;
+    void State(SessionResult& OutResult) {
+        OutResult.running = false;
+        OutResult.exit_code = exit_code;
+        if (ownership_lost) {
+            OutResult.ok = false; OutResult.system_error = ECHILD;
+            OutResult.message = "Owned child wait identity is unavailable";
+            return;
+        }
+        if (root_reaped) return;
+        siginfo_t info{};
+        if (waitid(P_PID, (id_t)process->pid, &info, WEXITED | WNOHANG | WNOWAIT) == 0) {
+            if (info.si_pid == process->pid) {
+                exit_code = info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status;
+                OutResult.exit_code = exit_code;
+            } else OutResult.running = true;
+        } else if (errno == EINTR) OutResult.running = true;
+        else {
+            ownership_lost = cleanup_unverified = true;
+            OutResult.ok = false; OutResult.system_error = errno;
+            OutResult.message = "Cannot observe owned child without reaping";
+        }
+    }
 #endif
     ~Impl() {
 #ifdef _WIN32
         if (input) CloseHandle(input);
+#else
+        if (input >= 0) close(input);
+        if (process && !root_reaped && !ownership_lost && termination_requested) {
+            int status = 0;
+            (void)waitpid(process->pid, &status, WNOHANG);
+        }
 #endif
         if (process) kano_process_free(process); // closes kill-on-close Job
 #ifdef _WIN32
@@ -181,15 +224,6 @@ struct LaunchText {
     }
 };
 
-void Capture(KanoUnattendedProcessResult& InCapture, SessionResult& OutResult) {
-    if (InCapture.process.stdout_size)
-        OutResult.stdout_data.append(InCapture.process.stdout_data, InCapture.process.stdout_size);
-    if (InCapture.process.stderr_size)
-        OutResult.stderr_data.append(InCapture.process.stderr_data, InCapture.process.stderr_size);
-    OutResult.stdout_truncated = InCapture.process.stdout_truncated;
-    OutResult.stderr_truncated = InCapture.process.stderr_truncated;
-}
-
 void State(KanoProcess InProcess, SessionResult& OutResult) {
     const DWORD waited = WaitForSingleObject(InProcess->process_info.hProcess, 0);
     OutResult.running = waited == WAIT_TIMEOUT;
@@ -201,7 +235,125 @@ void State(KanoProcess InProcess, SessionResult& OutResult) {
         OutResult.ok = false; OutResult.system_error = GetLastError();
     }
 }
+#else
+bool PosixText(const std::string& InText) {
+    for (size_t index = 0; index < InText.size();) {
+        const unsigned char first = (unsigned char)InText[index++];
+        if (!first) return false;
+        if (first < 0x80) continue;
+        unsigned int value = 0, minimum = 0;
+        size_t continuation = 0;
+        if (first >= 0xc2 && first <= 0xdf) { value = first & 0x1f; minimum = 0x80; continuation = 1; }
+        else if (first >= 0xe0 && first <= 0xef) { value = first & 0x0f; minimum = 0x800; continuation = 2; }
+        else if (first >= 0xf0 && first <= 0xf4) { value = first & 0x07; minimum = 0x10000; continuation = 3; }
+        else return false;
+        if (continuation > InText.size() - index) return false;
+        for (size_t part = 0; part < continuation; ++part) {
+            const unsigned char next = (unsigned char)InText[index++];
+            if ((next & 0xc0) != 0x80) return false;
+            value = (value << 6) | (next & 0x3f);
+        }
+        if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) return false;
+    }
+    return true;
+}
+
+bool Validate(const SessionOptions& InOptions) {
+    if (InOptions.executable.empty() || InOptions.executable.front() != '/' ||
+        InOptions.startup_timeout_ms <= 0 || InOptions.cleanup_timeout_ms <= 0 ||
+        !InOptions.stdout_max_bytes || !InOptions.stderr_max_bytes ||
+        InOptions.stdout_max_bytes == (size_t)-1 || InOptions.stderr_max_bytes == (size_t)-1 ||
+        !PosixText(InOptions.executable) || !PosixText(InOptions.working_dir)) return false;
+    for (const auto& argument : InOptions.arguments) if (!PosixText(argument)) return false;
+    for (const auto& entry : InOptions.environment)
+        if (entry.first.empty() || entry.first.find('=') != std::string::npos ||
+            !PosixText(entry.first) || !PosixText(entry.second)) return false;
+    return true;
+}
+
+struct LaunchText {
+    std::vector<const char*> arguments;
+    KanoProcessOptions options{};
+    std::vector<std::string> environment;
+    std::vector<char*> environment_pointers;
+    bool Initialize(const SessionOptions& InOptions) {
+        for (const auto& argument : InOptions.arguments) arguments.push_back(argument.c_str());
+        options.executable = InOptions.executable.c_str();
+        options.working_dir = InOptions.working_dir.empty() ? nullptr : InOptions.working_dir.c_str();
+        options.argv = arguments.data(); options.argv_count = arguments.size();
+        options.mode = KANO_PROCESS_MODE_CAPTURE;
+        std::map<std::string, std::string> entries;
+#if defined(__APPLE__)
+        char** inherited = *_NSGetEnviron();
+#else
+        char** inherited = ::environ;
 #endif
+        for (char** entry = inherited; entry && *entry; ++entry) {
+            const std::string text(*entry);
+            const size_t split = text.find('=');
+            if (split != std::string::npos && split) entries[text.substr(0, split)] = text.substr(split + 1);
+        }
+        for (const auto& entry : InOptions.environment) {
+            if (entry.second.empty()) entries.erase(entry.first);
+            else entries[entry.first] = entry.second;
+        }
+        for (const auto& entry : entries) environment.push_back(entry.first + "=" + entry.second);
+        for (auto& entry : environment) environment_pointers.push_back(&entry[0]);
+        environment_pointers.push_back(nullptr);
+        return true;
+    }
+};
+
+bool InputPipe(int& OutParent, int& OutChild, long long InDeadline) {
+    std::unique_lock<std::mutex> lock(kano_process_spawn_mutex, std::defer_lock);
+    if (!kano_process_lock_spawn(lock, InDeadline)) return false;
+    int endpoints[2] = {-1, -1};
+    if (!kano_process_cloexec_pipe(endpoints)) return false;
+    if (!kano_process_make_nonblocking(endpoints[1])) {
+        const int error = errno;
+        close(endpoints[0]); close(endpoints[1]); errno = error;
+        return false;
+    }
+    OutParent = endpoints[1]; OutChild = endpoints[0];
+    return true;
+}
+
+ssize_t WritePipe(int InFd, const char* InData, size_t InSize) {
+    sigset_t pipeSignal, previous, pending;
+    sigemptyset(&pipeSignal); sigaddset(&pipeSignal, SIGPIPE);
+    const int blocked = pthread_sigmask(SIG_BLOCK, &pipeSignal, &previous);
+    if (blocked) { errno = blocked; return -1; }
+    if (sigpending(&pending) != 0) {
+        const int error = errno;
+        (void)pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+        errno = error; return -1;
+    }
+    const bool alreadyPending = sigismember(&pending, SIGPIPE) == 1;
+    const ssize_t count = write(InFd, InData, InSize);
+    int error = errno;
+    // Consume only a newly generated blocked SIGPIPE, preserving any signal
+    // pending before this write and the caller's original thread mask.
+    if (count < 0 && error == EPIPE && !alreadyPending && sigpending(&pending) == 0 &&
+        sigismember(&pending, SIGPIPE) == 1) {
+        int observed = 0;
+        const int waited = sigwait(&pipeSignal, &observed);
+        if (waited) error = waited;
+    }
+    const int restored = pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+    if (restored) { errno = restored; return -1; }
+    errno = error;
+    return count;
+}
+#endif
+
+void Capture(KanoUnattendedProcessResult& InCapture, SessionResult& OutResult) {
+    if (InCapture.process.stdout_size)
+        OutResult.stdout_data.append(InCapture.process.stdout_data, InCapture.process.stdout_size);
+    if (InCapture.process.stderr_size)
+        OutResult.stderr_data.append(InCapture.process.stderr_data, InCapture.process.stderr_size);
+    OutResult.stdout_truncated = InCapture.process.stdout_truncated;
+    OutResult.stderr_truncated = InCapture.process.stderr_truncated;
+}
 } // namespace
 
 Session::Session() : mImpl(new Impl) {}
@@ -270,14 +422,75 @@ SessionResult Session::Start(const SessionOptions& InOptions) {
     State(mImpl->process, result);
     return result;
 #else
-    (void)InOptions;
-    return SessionError("Persistent contained process sessions are supported on Windows only");
+    if (!mImpl) mImpl.reset(new Impl);
+    if (mImpl->cleanup_unverified)
+        return SessionError("Previous launch cleanup is unverified; session cannot be reused");
+    if (mImpl->process) return SessionError("Session already owns a process; close it before restart");
+    if (!Validate(InOptions)) {
+        auto result = SessionError("Invalid session options", EINVAL);
+        result.cleanup_complete = true;
+        return result;
+    }
+    struct sigaction childAction{};
+    const int childActionResult = sigaction(SIGCHLD, nullptr, &childAction);
+    if (childActionResult != 0 || childAction.sa_handler == SIG_IGN ||
+        (childAction.sa_flags & SA_NOCLDWAIT)) {
+        auto result = SessionError("Session requires retained child wait ownership", childActionResult ? errno : ECHILD);
+        result.cleanup_complete = true;
+        return result;
+    }
+    mImpl->identity = {};
+    mImpl->root_reaped = mImpl->termination_requested = mImpl->ownership_lost = mImpl->containment_empty = false;
+    mImpl->exit_code = -1;
+    const long long deadline = kano_process_now_ms() + InOptions.startup_timeout_ms;
+    LaunchText launch;
+    if (!launch.Initialize(InOptions)) {
+        auto result = SessionError("Cannot prepare process launch", errno);
+        result.cleanup_complete = true; return result;
+    }
+    int childInput = -1;
+    if (!InputPipe(mImpl->input, childInput, deadline)) {
+        auto result = SessionError("Cannot create process input", errno);
+        result.cleanup_complete = true; return result;
+    }
+    KanoProcessSessionLaunch extra{childInput, launch.environment_pointers.data()};
+    KanoUnattendedProcessResult spawned{};
+    spawned.status = KANO_UNATTENDED_PROCESS_COMPLETED;
+    spawned.cleanup_complete = true;
+    mImpl->process = kano_process_spawn_internal(&launch.options, &spawned, deadline,
+        InOptions.cleanup_timeout_ms, &extra);
+    close(childInput);
+#ifdef KANO_PROCESS_TESTING
+    if (!mImpl->process && kano_process_fail_launch_cleanup_confirmation) {
+        kano_process_fail_launch_cleanup_confirmation = false;
+        if (spawned.cleanup_complete) spawned.cleanup_complete = false;
+    }
+#endif
+    mImpl->options = InOptions;
+    SessionResult result;
+    result.ok = mImpl->process != nullptr;
+    result.system_error = spawned.system_error;
+    result.cleanup_complete = spawned.cleanup_complete;
+    if (!result.ok) {
+        mImpl->cleanup_unverified = !result.cleanup_complete;
+        CloseInput();
+        result.message = "Contained process launch failed (status=" + std::to_string(spawned.status) + ")";
+        return result;
+    }
+    // This records the owned child only. General POSIX PID identity queries
+    // remain unsupported; waitid(WNOWAIT) retains the actual ownership token.
+    mImpl->identity.pid = (std::uint64_t)mImpl->process->pid;
+    mImpl->identity.executable = InOptions.executable;
+    mImpl->State(result);
+    return result;
 #endif
 }
 
 void Session::CloseInput() {
 #ifdef _WIN32
     if (mImpl && mImpl->input) { CloseHandle(mImpl->input); mImpl->input = nullptr; }
+#else
+    if (mImpl && mImpl->input >= 0) { close(mImpl->input); mImpl->input = -1; }
 #endif
 }
 
@@ -305,8 +518,26 @@ SessionResult Session::Poll(int InTimeoutMs) {
     kano_process_free_unattended_result(&capture);
     return result;
 #else
-    (void)InTimeoutMs;
-    return SessionError("Persistent contained process sessions are supported on Windows only");
+    if (!mImpl || !mImpl->process || InTimeoutMs < 0) return SessionError("Invalid session poll", EINVAL);
+    const long long deadline = kano_process_now_ms() + InTimeoutMs;
+    KanoUnattendedProcessResult capture{};
+    capture.status = KANO_UNATTENDED_PROCESS_COMPLETED;
+    KanoProcessCaptureLimitsV2 limits{mImpl->options.stdout_max_bytes, mImpl->options.stderr_max_bytes};
+    SessionResult result; result.ok = true;
+    do {
+        bool progress = false;
+        if (!kano_process_strict_read(mImpl->process, false, &limits, &capture, &progress) ||
+            !kano_process_strict_read(mImpl->process, true, &limits, &capture, &progress)) {
+            result.ok = false; result.message = "Process capture failed"; result.system_error = capture.system_error;
+        }
+        mImpl->State(result);
+        if (!result.ok || progress || !result.running || kano_process_now_ms() >= deadline) break;
+        const long long remaining = deadline - kano_process_now_ms();
+        if (remaining > 0) (void)poll(nullptr, 0, (int)(remaining < 5 ? remaining : 5));
+    } while (true);
+    Capture(capture, result);
+    kano_process_free_unattended_result(&capture);
+    return result;
 #endif
 }
 
@@ -390,8 +621,48 @@ SessionResult Session::Write(const std::string& InData, int InTimeoutMs) {
     State(mImpl->process, result);
     return result;
 #else
-    (void)InData; (void)InTimeoutMs;
-    return SessionError("Persistent contained process sessions are supported on Windows only");
+    if (!mImpl || !mImpl->process || mImpl->input < 0 || InTimeoutMs <= 0)
+        return SessionError("Invalid session input write", EINVAL);
+    const long long deadline = kano_process_now_ms() + InTimeoutMs;
+    SessionResult result; result.ok = true;
+    size_t written = 0;
+    while (written < InData.size()) {
+        auto drained = Poll(0);
+        const size_t stdoutRemaining = mImpl->options.stdout_max_bytes - result.stdout_data.size();
+        const size_t stderrRemaining = mImpl->options.stderr_max_bytes - result.stderr_data.size();
+        result.stdout_data.append(drained.stdout_data, 0, stdoutRemaining);
+        result.stderr_data.append(drained.stderr_data, 0, stderrRemaining);
+        result.stdout_truncated |= drained.stdout_truncated || drained.stdout_data.size() > stdoutRemaining;
+        result.stderr_truncated |= drained.stderr_truncated || drained.stderr_data.size() > stderrRemaining;
+        if (!drained.ok) {
+            result.ok = false; result.system_error = drained.system_error;
+            result.message = drained.message; break;
+        }
+        if (kano_process_now_ms() >= deadline) {
+            result.ok = false; result.system_error = ETIMEDOUT;
+            result.message = "Process input deadline exceeded"; break;
+        }
+        const size_t remainingBytes = InData.size() - written;
+        const size_t requested = remainingBytes < 65536 ? remainingBytes : 65536;
+        const ssize_t count = WritePipe(mImpl->input, InData.data() + written, requested);
+        if (count > 0) { written += (size_t)count; continue; }
+        const int error = count < 0 ? errno : EIO;
+        if (error == EINTR) continue;
+        if (error != EAGAIN && error != EWOULDBLOCK) {
+            result.ok = false; result.system_error = error; result.message = "Process input failed";
+            if (error == EPIPE) CloseInput();
+            break;
+        }
+        const long long remaining = deadline - kano_process_now_ms();
+        if (remaining > 0) {
+            struct pollfd input = {mImpl->input, POLLOUT | POLLERR | POLLHUP, 0};
+            if (poll(&input, 1, (int)(remaining < 5 ? remaining : 5)) < 0 && errno != EINTR) {
+                result.ok = false; result.system_error = errno; result.message = "Cannot wait for process input"; break;
+            }
+        }
+    }
+    mImpl->State(result);
+    return result;
 #endif
 }
 
@@ -400,7 +671,10 @@ bool Session::IsRunning() const {
     return mImpl && mImpl->process &&
         WaitForSingleObject(mImpl->process->process_info.hProcess, 0) == WAIT_TIMEOUT;
 #else
-    return false;
+    if (!mImpl || !mImpl->process) return false;
+    SessionResult result; result.ok = true;
+    mImpl->State(result);
+    return result.ok && result.running;
 #endif
 }
 
@@ -461,8 +735,71 @@ SessionResult Session::Stop(int InTimeoutMs) {
     }
     return result;
 #else
-    (void)InTimeoutMs;
-    return SessionError("Persistent contained process sessions are supported on Windows only");
+    if (InTimeoutMs <= 0) return SessionError("Cleanup budget must be positive", EINVAL);
+    SessionResult result; result.ok = true;
+    if (!mImpl || !mImpl->process) {
+        result.cleanup_complete = !mImpl || !mImpl->cleanup_unverified;
+        result.ok = result.cleanup_complete;
+        if (!result.ok) result.message = "Previous launch cleanup remains unverified";
+        return result;
+    }
+    CloseInput();
+    const long long deadline = kano_process_now_ms() + InTimeoutMs;
+    mImpl->State(result);
+    if (!mImpl->termination_requested && !mImpl->ownership_lost && !mImpl->root_reaped) {
+        // The root remains unreaped here, reserving the PID/group identity.
+        mImpl->termination_requested = true;
+        if (!kano_process_signal_unreaped_tree(mImpl->process, SIGKILL)) {
+            result.ok = false; result.system_error = errno; result.message = "Owned process termination failed";
+        }
+    }
+    KanoUnattendedProcessResult capture{};
+    capture.status = KANO_UNATTENDED_PROCESS_COMPLETED;
+    KanoProcessCaptureLimitsV2 limits{mImpl->options.stdout_max_bytes, mImpl->options.stderr_max_bytes};
+    do {
+        bool progress = false;
+        const bool stdoutCaptured = kano_process_strict_read(mImpl->process, false, &limits, &capture, &progress);
+        const bool stderrCaptured = kano_process_strict_read(mImpl->process, true, &limits, &capture, &progress);
+        mImpl->State(result);
+        if (!result.running && !mImpl->root_reaped && !mImpl->ownership_lost && mImpl->termination_requested) {
+            int status = 0;
+            const pid_t waited = waitpid(mImpl->process->pid, &status, WNOHANG);
+            if (waited == mImpl->process->pid) {
+                mImpl->root_reaped = true;
+                mImpl->exit_code = kano_process_status_to_exit_code(status);
+                result.exit_code = mImpl->exit_code;
+            } else if (waited < 0 && errno != EINTR) {
+                mImpl->ownership_lost = mImpl->cleanup_unverified = true;
+                result.ok = false; result.system_error = errno; result.message = "Owned child reaping failed";
+            }
+        }
+        if (mImpl->root_reaped && !mImpl->containment_empty) {
+            if (kill(-mImpl->process->process_group, 0) != 0) {
+                if (errno == ESRCH) mImpl->containment_empty = true;
+                else { result.system_error = errno; }
+            }
+        }
+        if (stdoutCaptured && stderrCaptured && !mImpl->ownership_lost && mImpl->root_reaped &&
+            mImpl->containment_empty && kano_process_strict_pipes_closed(mImpl->process)) {
+            result.cleanup_complete = true; break;
+        }
+        if (mImpl->ownership_lost) break;
+        const long long remaining = deadline - kano_process_now_ms();
+        if (remaining <= 0) break;
+        if (!progress) (void)poll(nullptr, 0, (int)(remaining < 5 ? remaining : 5));
+    } while (true);
+    Capture(capture, result);
+    if (capture.status != KANO_UNATTENDED_PROCESS_COMPLETED) {
+        result.ok = false; result.system_error = capture.system_error;
+    }
+    kano_process_free_unattended_result(&capture);
+    if (!result.cleanup_complete) {
+        result.ok = false;
+        if (result.message.empty()) result.message = "Owned process cleanup could not be confirmed within budget";
+    } else {
+        kano_process_free(mImpl->process); mImpl->process = nullptr;
+    }
+    return result;
 #endif
 }
 

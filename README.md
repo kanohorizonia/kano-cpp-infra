@@ -161,7 +161,13 @@ returns incremental binary-safe chunks; `Write` can also return chunks drained
 while input is blocked. Both streams have independent per-operation retention
 limits and continue draining after truncation. Protocol consumers must reject
 truncated protocol output. An empty environment override removes an inherited
-key; overrides affect only the launched child.
+key; overrides affect only the launched child. POSIX Session launch prepares an
+explicit environment and absolute UTF-8 executable before `fork`; it never
+changes the parent's environment. POSIX capture pipes use close-on-exec and
+nonblocking parent I/O. The child owns a new process group. `Poll` observes exit
+without reaping; `Stop` signals that owned group before reaping the root and
+requires capture EOF within its cleanup budget. Escaped writers or lost child
+ownership leave cleanup unverified. A host that auto-reaps children is refused.
 
 On Windows, launch reuses the strict process foundation: the suspended child
 cannot execute until assignment to a kill-on-close Job succeeds. Only its three
@@ -185,6 +191,10 @@ caller's exit and retains any OS-imposed ancestor Job boundary. The detached
 program must own its own workers. These additive APIs currently support
 Windows only and return explicit unsupported errors elsewhere. Existing
 cross-platform one-shot process APIs are unchanged.
+
+Windows and POSIX Session support is separate from the Windows-only identity
+and detached-launch APIs above. Linux has an actual controlled-child gate;
+macOS execution must be qualified by each consumer.
 
 The focused `infra.process_session` test covers protocol I/O, EOF, blocked
 input, noisy stderr, failed launch/containment, exact identity, owned descendant

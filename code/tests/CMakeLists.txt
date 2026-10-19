@@ -130,6 +130,10 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/unattended_process/unattended_process_test.
     target_include_directories(kano_unattended_process_test_impl PUBLIC
         "${CMAKE_CURRENT_LIST_DIR}/../systems/kano_infra_process/public")
     target_compile_features(kano_unattended_process_test_impl PRIVATE cxx_std_17)
+    if(NOT WIN32)
+        find_package(Threads REQUIRED)
+        target_link_libraries(kano_unattended_process_test_impl PRIVATE Threads::Threads)
+    endif()
     add_executable(kano_unattended_process_child unattended_process/unattended_process_child.cpp)
     target_link_libraries(kano_unattended_process_child PRIVATE KanoInfra::unattended)
     add_executable(kano_unattended_process_test unattended_process/unattended_process_test.cpp)
