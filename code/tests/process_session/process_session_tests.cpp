@@ -415,14 +415,14 @@ static void RunPosixTests() {
         char parentCwd[PATH_MAX]{};
         Check(getcwd(parentCwd, sizeof(parentCwd)) != nullptr, "observe parent cwd");
         auto firstOptions = Options("context");
-        firstOptions.working_dir = directory.Child(u8"cwd-\u03a9-\u4e00");
+        firstOptions.working_dir = directory.Child("cwd-\xCE\xA9-\xE4\xB8\x80");
         firstOptions.arguments = {"context", "", "two words", "quote\"'", "back\\slash\\",
-            "$HOME;$(exit 9)&*?", u8"\u03a9-\u4e00-\U0001f431"};
-        firstOptions.environment = {{"KANO_SESSION_TEST_OVERRIDE", u8"child-\u03a9-\u4e00"},
+            "$HOME;$(exit 9)&*?", "\xCE\xA9-\xE4\xB8\x80-\xF0\x9F\x90\xB1"};
+        firstOptions.environment = {{"KANO_SESSION_TEST_OVERRIDE", "child-\xCE\xA9-\xE4\xB8\x80"},
             {"KANO_SESSION_TEST_REMOVED", ""}, {"kano_session_test_case", "lower-child"}};
         auto secondOptions = Options("context");
-        secondOptions.working_dir = directory.Child(u8"other-\u4e8c");
-        secondOptions.arguments = {"context", "second launch", "", u8"\u4e8c-\\\""};
+        secondOptions.working_dir = directory.Child("other-\xE4\xBA\x8C");
+        secondOptions.arguments = {"context", "second launch", "", "\xE4\xBA\x8C-\\\""};
         secondOptions.environment = {{"KANO_SESSION_TEST_OVERRIDE", "second-child"},
             {"KANO_SESSION_TEST_INHERITED", "second-inherited"}, {"KANO_SESSION_TEST_CASE", "upper-second"}};
         Session first, second;
@@ -444,7 +444,7 @@ static void RunPosixTests() {
         const auto secondOutput = Until(second, "ready");
         CheckContext(firstOutput, firstOptions); CheckContext(secondOutput, secondOptions);
         CheckEnvironment(firstOutput, "KANO_SESSION_TEST_INHERITED", "inherited-parent");
-        CheckEnvironment(firstOutput, "KANO_SESSION_TEST_OVERRIDE", u8"child-\u03a9-\u4e00");
+        CheckEnvironment(firstOutput, "KANO_SESSION_TEST_OVERRIDE", "child-\xCE\xA9-\xE4\xB8\x80");
         CheckEnvironment(firstOutput, "KANO_SESSION_TEST_REMOVED", nullptr);
         CheckEnvironment(firstOutput, "KANO_SESSION_TEST_CASE", "upper-parent");
         CheckEnvironment(firstOutput, "kano_session_test_case", "lower-child");
