@@ -2,6 +2,9 @@
 
 include(CMakeFindDependencyMacro)
 find_dependency(jsoncpp CONFIG)
+if(@KANO_INFRA_ENABLE_HTTP@)
+    find_dependency(CURL 8)
+endif()
 if(NOT WIN32)
     find_dependency(Threads)
 endif()
@@ -28,5 +31,8 @@ if(TARGET KanoInfra::kano_infra_all AND NOT TARGET KanoInfra::All)
 endif()
 set(KanoInfra_All_FOUND TRUE)
 set(KanoInfra_unattended_FOUND TRUE)
+if(TARGET KanoInfra::http)
+    set(KanoInfra_http_FOUND TRUE)
+endif()
 
 check_required_components(KanoInfra)

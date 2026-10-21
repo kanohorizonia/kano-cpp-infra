@@ -3,9 +3,15 @@
 #include <kano_infra_process/public/kano_process_session.hpp>
 #include <kano_infra_platform/public/kano_local_path.hpp>
 #include <cstdio>
+#ifdef KANO_INSTALLED_HTTP
+#include <kano_http.hpp>
+#endif
 
 int main(int argc, char** argv) {
     kano::infra::ConfigureUnattendedExecution();
+#ifdef KANO_INSTALLED_HTTP
+    if (kano::http::ValidateEndpoint("http://localhost:1234/", kano::http::EndpointPolicy::LoopbackHttp) != "http://127.0.0.1:1234") return 6;
+#endif
     std::uint64_t parent = 0;
     if (kano::process::QueryParent({}, parent)) return 1;
     if (kano::platform::LocalPath(std::filesystem::current_path()).empty()) return 2;
