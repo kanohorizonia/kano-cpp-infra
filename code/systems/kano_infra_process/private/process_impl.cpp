@@ -8,6 +8,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <tlhelp32.h>
 #else
 #include <errno.h>
 #include <fcntl.h>

@@ -842,6 +842,22 @@ bool IsAlive(const Identity& InIdentity) {
 #endif
 }
 
+bool QueryParent(const Identity& InIdentity, std::uint64_t& OutParent) {
+    OutParent = 0;
+#ifdef _WIN32
+    if (!IsAlive(InIdentity)) return false;
+    const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W entry{}; entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snapshot, &entry)) do {
+        if (entry.th32ProcessID == InIdentity.pid) { OutParent = entry.th32ParentProcessID; break; }
+    } while (Process32NextW(snapshot, &entry));
+    CloseHandle(snapshot);
+    if (OutParent && IsAlive(InIdentity)) return true;
+#endif
+    OutParent = 0; return false;
+}
+
 DetachedResult LaunchDetached(const SessionOptions& InOptions) {
     DetachedResult result;
 #ifdef _WIN32

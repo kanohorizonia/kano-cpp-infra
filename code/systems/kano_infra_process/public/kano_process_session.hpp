@@ -99,5 +99,7 @@ DetachedResult LaunchDetached(const SessionOptions& InOptions);
 bool QueryIdentity(std::uint64_t InPid, Identity& OutIdentity, std::string& OutError);
 Identity CurrentIdentity();
 bool IsAlive(const Identity& InIdentity);
+// Read-only parent PID with exact child identity checked before/after snapshot.
+bool QueryParent(const Identity& InIdentity, std::uint64_t& OutParent);
 
 } // namespace kano::process
