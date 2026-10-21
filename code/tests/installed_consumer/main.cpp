@@ -1,6 +1,7 @@
 #include <kano_unattended.hpp>
 #include <kano_task_scheduler.hpp>
 #include <kano_infra_process/public/kano_process_session.hpp>
+#include <kano_infra_process/public/kano_process_listener.hpp>
 #include <kano_infra_platform/public/kano_local_path.hpp>
 #include <cstdio>
 #ifdef KANO_INSTALLED_HTTP
@@ -9,6 +10,8 @@
 
 int main(int argc, char** argv) {
     kano::infra::ConfigureUnattendedExecution();
+    if (!kano::process::MatchLoopbackListeners(1234, {}).verified) return 7;
+    if (kano::process::MatchLoopbackListeners(1234, {{42, "*:1234"}}).verified) return 8;
 #ifdef KANO_INSTALLED_HTTP
     if (kano::http::ValidateEndpoint("http://localhost:1234/", kano::http::EndpointPolicy::LoopbackHttp) != "http://127.0.0.1:1234") return 6;
 #endif

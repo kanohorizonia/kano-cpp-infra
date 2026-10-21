@@ -94,6 +94,16 @@ Public CMake targets currently include:
 - `KanoInfra::timing`
 - `KanoInfra::unattended`
 
+## Loopback listener snapshots
+
+`kano_process_listener.hpp` provides finite read-only loopback listener
+snapshots using Windows TCP owner tables or existing macOS `lsof` inside
+`Session`. It permits exactly one literal IPv4 loopback listener. Consumers
+bracket snapshots with contained child identity/lifecycle checks; a PID alone
+never authorizes a stop. Missing tools, unsupported platforms or ambiguous
+observations fail closed without process-discovery/termination fallback.
+KINF-TSK-0180 exercises this helper through a compiled controlled engine.
+
 ## Bounded HTTP
 
 Set `KANO_INFRA_ENABLE_HTTP=ON` before `add_subdirectory` to enable
