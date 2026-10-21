@@ -94,6 +94,27 @@ Public CMake targets currently include:
 - `KanoInfra::timing`
 - `KanoInfra::unattended`
 
+## Bounded HTTP
+
+Set `KANO_INFRA_ENABLE_HTTP=ON` before `add_subdirectory` to enable
+`KanoInfra::http` and `kano_http.hpp`. This optional target reuses the consumer's
+existing CURL 8 package; it is excluded from `KanoInfra::All`. Installed packages
+with this option resolve CURL and expose the `http` component.
+
+`kano::http::Perform` makes one direct GET or POST with finite transfer and body
+budgets. It disables proxy, redirect, netrc and retry behavior, verifies TLS peer
+and host, and supports cooperative connection cancellation. Errors contain a
+fixed safe message and the received HTTP status when available, including body
+overflow; no URL, bearer or response bytes appear in exceptions.
+
+`LoopbackHttp` requires an explicit loopback HTTP port. `PrivateControl` also
+permits literal RFC1918 or ULA addresses over verified HTTPS. Hostnames other
+than normalized localhost, credentials in URLs, public addresses, fragments and
+non-root endpoint paths are rejected. Consumers own credentials, protocol
+validation, acknowledgement reconciliation and backend cancellation policy.
+KINF-TSK-0179 exercises real loopback requests, bounded failures, read-only
+commands and lost acknowledgements through Catch2 on the consuming CLI.
+
 ## Unattended Native Execution
 
 The header-only `KanoInfra::unattended` target supplies `kano_unattended.hpp`.

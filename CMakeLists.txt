@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(kano-cpp-infra VERSION 1.2.0 LANGUAGES C CXX)
+project(kano-cpp-infra VERSION 1.3.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -7,6 +7,7 @@ include(FetchContent)
 include(scripts/cmake/KanoInfraUnattended.cmake)
 
 option(KANO_INFRA_BUILD_TESTS "Build unattended startup and process contracts" OFF)
+option(KANO_INFRA_ENABLE_HTTP "Build opt-in direct bounded HTTP (existing CURL 8)" OFF)
 
 set(KANO_JSONCPP_SOURCE_MODE "fetch" CACHE STRING "jsoncpp source mode: fetch|system")
 set_property(CACHE KANO_JSONCPP_SOURCE_MODE PROPERTY STRINGS fetch system)
@@ -59,6 +60,10 @@ add_subdirectory(code/systems/kano_infra_scheduler)
 add_subdirectory(code/systems/kano_infra_diagnostics)
 add_subdirectory(code/systems/kano_infra_self)
 add_subdirectory(code/systems/kano_infra_timing)
+if(KANO_INFRA_ENABLE_HTTP)
+    add_subdirectory(code/systems/kano_infra_http)
+    install(TARGETS kano_infra_http EXPORT KanoInfraTargets)
+endif()
 add_subdirectory(code/apps/kano_infra_tool)
 
 add_library(kano_infra_all INTERFACE)
