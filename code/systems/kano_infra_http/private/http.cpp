@@ -60,8 +60,11 @@ std::string ValidateEndpoint(const std::string& InUrl, EndpointPolicy InPolicy) 
         Check(parsed.ec == std::errc{} && parsed.ptr == port.data() + port.size() && number > 0 && number <= 65535);
     }
     if (host == "localhost") host = "127.0.0.1";
+    Check(host.find('%') == std::string::npos); // Some platform inet_pton implementations accept zones.
     unsigned char address[16]{}; bool loopback = false, privateAddress = false; bool ipv6 = false;
     if (inet_pton(AF_INET, host.c_str(), address) == 1) {
+        Check(host == std::to_string(address[0]) + "." + std::to_string(address[1]) + "." +
+            std::to_string(address[2]) + "." + std::to_string(address[3]));
         loopback = address[0] == 127;
         privateAddress = address[0] == 10 || (address[0] == 172 && address[1] >= 16 && address[1] <= 31) ||
             (address[0] == 192 && address[1] == 168);
