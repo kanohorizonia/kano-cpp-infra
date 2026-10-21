@@ -10,6 +10,23 @@ credentials in this repository.
 
 ## Repository Status
 
+`KanoInfra::scheduler` exposes `kano::scheduler::Invoke` through the Windows
+`kano_task_scheduler.exe` helper. Potentially blocking COM calls run in the
+existing contained `Session` with finite operation/capture/cleanup budgets.
+Timed-out mutations require readback before retry. Registration never replaces
+an existing task; mutations compare the supplied task projection first. The
+consumer retains task policy and resident lifecycle ownership.
+The identity response includes the process `integrity_rid`. A failed root read
+includes Low-integrity context when applicable, while preserving the actual
+HRESULT. An inherited Low label on an executable can lower its child process
+even when launched by a normal Medium user. Qualification should use the
+authorized build context; this helper never changes tokens or ACLs.
+
+`kano_local_path.hpp` validates absolute local paths and existing non-reparse
+ancestry. `kano::process::QueryParent` brackets a read-only Windows parent
+snapshot with exact child identity checks. No credentials, ACL changes or new
+process containment implementation are introduced.
+
 This repository is public and distributed under the MIT License. Documentation,
 examples, scripts, and defaults must remain safe for public readers. Do not add
 secrets, machine-local paths, private hostnames, or release-only credentials.
@@ -72,6 +89,7 @@ Public CMake targets currently include:
 - `KanoInfra::diagnostics`
 - `KanoInfra::platform`
 - `KanoInfra::process`
+- `KanoInfra::scheduler` (opt-in Windows Task Scheduler helper transport)
 - `KanoInfra::self`
 - `KanoInfra::timing`
 - `KanoInfra::unattended`

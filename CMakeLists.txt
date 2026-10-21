@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(kano-cpp-infra VERSION 1.1.0 LANGUAGES C CXX)
+project(kano-cpp-infra VERSION 1.2.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -55,6 +55,7 @@ add_subdirectory(code/systems/kano_infra_config)
 add_subdirectory(code/systems/kano_infra_build_info)
 add_subdirectory(code/systems/kano_infra_platform)
 add_subdirectory(code/systems/kano_infra_process)
+add_subdirectory(code/systems/kano_infra_scheduler)
 add_subdirectory(code/systems/kano_infra_diagnostics)
 add_subdirectory(code/systems/kano_infra_self)
 add_subdirectory(code/systems/kano_infra_timing)
@@ -83,6 +84,7 @@ install(TARGETS
     kano_infra_build_info
     kano_infra_platform
     kano_infra_process
+    kano_infra_scheduler
     kano_infra_diagnostics
     kano_infra_self
     kano_infra_timing
