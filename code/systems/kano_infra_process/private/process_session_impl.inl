@@ -119,14 +119,16 @@ struct EnvironmentLess {
 
 bool Environment(const SessionOptions& InOptions, std::vector<wchar_t>& OutBlock) {
     std::map<std::wstring, std::wstring, EnvironmentLess> entries;
-    LPWCH block = GetEnvironmentStringsW();
-    if (!block) return false;
-    for (const wchar_t* entry = block; *entry; entry += wcslen(entry) + 1) {
-        std::wstring value(entry);
-        const size_t split = value.find(L'=', 1); // retain Windows drive entries
-        if (split != std::wstring::npos) entries[value.substr(0, split)] = value.substr(split + 1);
+    if (InOptions.inherit_environment) {
+        LPWCH block = GetEnvironmentStringsW();
+        if (!block) return false;
+        for (const wchar_t* entry = block; *entry; entry += wcslen(entry) + 1) {
+            std::wstring value(entry);
+            const size_t split = value.find(L'=', 1); // retain Windows drive entries
+            if (split != std::wstring::npos) entries[value.substr(0, split)] = value.substr(split + 1);
+        }
+        FreeEnvironmentStringsW(block);
     }
-    FreeEnvironmentStringsW(block);
     for (const auto& entry : InOptions.environment) {
         std::wstring name, value;
         if (entry.first.empty() || entry.first.find('=') != std::string::npos ||
@@ -134,7 +136,7 @@ bool Environment(const SessionOptions& InOptions, std::vector<wchar_t>& OutBlock
             SetLastError(ERROR_INVALID_PARAMETER);
             return false;
         }
-        if (value.empty()) entries.erase(name);
+        if (InOptions.inherit_environment && value.empty()) entries.erase(name);
         else entries[name] = value;
     }
     for (const auto& entry : entries) {
@@ -288,13 +290,15 @@ struct LaunchText {
 #else
         char** inherited = ::environ;
 #endif
-        for (char** entry = inherited; entry && *entry; ++entry) {
-            const std::string text(*entry);
-            const size_t split = text.find('=');
-            if (split != std::string::npos && split) entries[text.substr(0, split)] = text.substr(split + 1);
+        if (InOptions.inherit_environment) {
+            for (char** entry = inherited; entry && *entry; ++entry) {
+                const std::string text(*entry);
+                const size_t split = text.find('=');
+                if (split != std::string::npos && split) entries[text.substr(0, split)] = text.substr(split + 1);
+            }
         }
         for (const auto& entry : InOptions.environment) {
-            if (entry.second.empty()) entries.erase(entry.first);
+            if (InOptions.inherit_environment && entry.second.empty()) entries.erase(entry.first);
             else entries[entry.first] = entry.second;
         }
         for (const auto& entry : entries) environment.push_back(entry.first + "=" + entry.second);

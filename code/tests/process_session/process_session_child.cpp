@@ -7,10 +7,41 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#endif
 
+static int ReportEnvironment(FILE* InOutput) {
+    const char* names[] = {"KANO_SESSION_TEST_INHERITED", "KANO_SESSION_TEST_OVERRIDE",
+        "KANO_SESSION_TEST_REMOVED", "KANO_SESSION_TEST_EMPTY", "FORWARDED_ALLOW_IPS"};
+    for (const char* name : names) {
+#ifdef _WIN32
+        // Query the OS block directly: an empty variable is distinct from an
+        // absent one, independently of CRT environment initialization.
+        char value[256]{};
+        SetLastError(ERROR_SUCCESS);
+        const DWORD length = GetEnvironmentVariableA(name, value, sizeof(value));
+        if (length >= sizeof(value)) return 8;
+        const bool present = length || GetLastError() != ERROR_ENVVAR_NOT_FOUND;
+        std::fprintf(InOutput, "%s=%s%s\n", name, present ? "value:" : "absent", present ? value : "");
+#else
+        const char* value = std::getenv(name);
+        std::fprintf(InOutput, "%s=%s%s\n", name, value ? "value:" : "absent", value ? value : "");
+#endif
+    }
+    return std::fflush(InOutput) == 0 ? 0 : 9;
+}
+
+#ifdef _WIN32
 int main(int argc, char** argv) {
     kano::infra::ConfigureUnattendedExecution();
     const std::string mode = argc > 1 ? argv[1] : "echo";
+    if (mode == "environment-policy") return ReportEnvironment(stdout);
+    if (mode == "environment-file") {
+        if (argc != 3) return 2;
+        FILE* file = nullptr;
+        if (fopen_s(&file, argv[2], "wb") || !file) return 3;
+        const int result = ReportEnvironment(file);
+        return std::fclose(file) == 0 ? result : 4;
+    }
     if (mode == "leaf") { Sleep(60000); return 0; }
     if (mode == "detached-leaf") { Sleep(5000); return 0; }
     if (mode == "exit-7") { std::fputs("controlled startup cause\n", stderr); return 7; }
@@ -230,6 +261,7 @@ int main(int argc, char** argv) {
     kano::infra::ConfigureUnattendedExecution();
     alarm(12); // A failed test cannot leave an unbounded fixture alive.
     const std::string mode = argc > 1 ? argv[1] : "echo";
+    if (mode == "environment-policy") return ReportEnvironment(stdout);
     if (mode == "stdio-probe") return StandardDescriptorProbe(true);
     if (mode == "stdio-output") return StandardDescriptorProbe(false);
     if (mode == "closed-stdio-owner") return argc == 3 ? ClosedStdioOwner(argv[0], argv[2]) : 19;
