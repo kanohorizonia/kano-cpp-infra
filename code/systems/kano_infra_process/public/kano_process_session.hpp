@@ -20,13 +20,15 @@ struct SessionOptions {
     std::string executable;
     std::string working_dir;
     std::vector<std::string> arguments; // excludes executable
-    // Inherited environment plus overrides; an empty value removes a key.
+    // With inheritance, overrides replace keys and empty values remove them.
+    // Without inheritance, these are exact values; empty values stay present.
     // Keys are case-insensitive on Windows and case-sensitive on POSIX.
     std::vector<std::pair<std::string, std::string>> environment;
     int startup_timeout_ms = 10000;
     int cleanup_timeout_ms = 5000;
     std::size_t stdout_max_bytes = 65536; // per operation, both must be positive
     std::size_t stderr_max_bytes = 65536;
+    bool inherit_environment = true;
 };
 
 struct SessionResult {

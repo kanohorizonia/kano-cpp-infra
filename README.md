@@ -209,8 +209,11 @@ readiness, request framing, graceful shutdown, and request deadlines. `Poll`
 returns incremental binary-safe chunks; `Write` can also return chunks drained
 while input is blocked. Both streams have independent per-operation retention
 limits and continue draining after truncation. Protocol consumers must reject
-truncated protocol output. An empty environment override removes an inherited
-key; overrides affect only the launched child. POSIX Session launch prepares an
+truncated protocol output. Environment inheritance is enabled by default; an
+empty override removes an inherited key. Set `SessionOptions::inherit_environment`
+to `false` for an empty starting environment with exact supplied values, including
+present empty values. Both modes affect only the launched child and also apply
+to Windows `LaunchDetached`. POSIX Session launch prepares an
 explicit environment and absolute UTF-8 executable before `fork`; it never
 changes the parent's environment. POSIX capture pipes use close-on-exec and
 nonblocking parent I/O. The child owns a new process group. `Poll` observes exit

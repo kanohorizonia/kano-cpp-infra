@@ -520,8 +520,132 @@ static void RunPosixTests() {
 }
 #endif
 
+static bool PolicyEnvironmentValue(const char* InName, std::string& OutValue) {
+#ifdef _WIN32
+    char value[256]{};
+    SetLastError(ERROR_SUCCESS);
+    const DWORD length = GetEnvironmentVariableA(InName, value, sizeof(value));
+    const DWORD error = GetLastError();
+    Check(length < sizeof(value), "controlled environment value fits fixture buffer");
+    OutValue = value;
+    return length || error != ERROR_ENVVAR_NOT_FOUND;
+#else
+    const char* value = std::getenv(InName);
+    OutValue = value ? value : "";
+    return value != nullptr;
+#endif
+}
+
+static void SetPolicyEnvironment(const char* InName, const char* InValue) {
+#ifdef _WIN32
+    Check(SetEnvironmentVariableA(InName, InValue) != FALSE, "set controlled parent environment");
+#else
+    Check((InValue ? setenv(InName, InValue, 1) : unsetenv(InName)) == 0,
+        "set controlled parent environment");
+#endif
+}
+
+struct PolicyEnvironment {
+    const char* name;
+    std::string previous;
+    bool was_present;
+    PolicyEnvironment(const char* InName, const char* InValue) : name(InName),
+        was_present(PolicyEnvironmentValue(InName, previous)) {
+        SetPolicyEnvironment(name, InValue);
+    }
+    ~PolicyEnvironment() { SetPolicyEnvironment(name, was_present ? previous.c_str() : nullptr); }
+};
+
+static void CheckPolicyEnvironment(const std::string& InOutput, const char* InName,
+                                   const char* InExpected) {
+    const std::string line = std::string("\n") + InName + "=" +
+        (InExpected ? std::string("value:") + InExpected : "absent");
+    const std::string output = "\n" + InOutput;
+    Check(output.find(line + "\n") != std::string::npos ||
+        output.find(line + "\r\n") != std::string::npos,
+        "child distinguishes exact values, empty values and absent environment keys");
+}
+
+static void RunEnvironmentPolicyTests() {
+    std::puts("Session: inherited and exact environment policies");
+    PolicyEnvironment inherited("KANO_SESSION_TEST_INHERITED", "parent-inherited");
+    PolicyEnvironment overridden("KANO_SESSION_TEST_OVERRIDE", "parent-override");
+    PolicyEnvironment removed("KANO_SESSION_TEST_REMOVED", "parent-remove");
+    PolicyEnvironment empty("KANO_SESSION_TEST_EMPTY", "parent-empty");
+    PolicyEnvironment forwarded("FORWARDED_ALLOW_IPS", "parent-forwarded");
+    auto options = Options("environment-policy");
+    Check(options.inherit_environment, "environment inheritance remains enabled by default");
+    options.environment = {{"KANO_SESSION_TEST_OVERRIDE", "child-override"},
+        {"KANO_SESSION_TEST_REMOVED", ""}, {"KANO_SESSION_TEST_EMPTY", ""},
+        {"FORWARDED_ALLOW_IPS", ""}};
+    Session session;
+    Check(session.Start(options).ok, "inherited environment policy launch");
+    const auto inheritedOutput = Until(session, "FORWARDED_ALLOW_IPS=");
+    CheckPolicyEnvironment(inheritedOutput, "KANO_SESSION_TEST_INHERITED", "parent-inherited");
+    CheckPolicyEnvironment(inheritedOutput, "KANO_SESSION_TEST_OVERRIDE", "child-override");
+    CheckPolicyEnvironment(inheritedOutput, "KANO_SESSION_TEST_REMOVED", nullptr);
+    CheckPolicyEnvironment(inheritedOutput, "KANO_SESSION_TEST_EMPTY", nullptr);
+    CheckPolicyEnvironment(inheritedOutput, "FORWARDED_ALLOW_IPS", nullptr);
+    Check(session.Close().cleanup_complete, "inherited environment policy cleanup");
+
+    options.inherit_environment = false;
+    Check(session.Start(options).ok, "exact environment policy launch");
+    const auto exactOutput = Until(session, "FORWARDED_ALLOW_IPS=");
+    CheckPolicyEnvironment(exactOutput, "KANO_SESSION_TEST_INHERITED", nullptr);
+    CheckPolicyEnvironment(exactOutput, "KANO_SESSION_TEST_OVERRIDE", "child-override");
+    CheckPolicyEnvironment(exactOutput, "KANO_SESSION_TEST_REMOVED", "");
+    CheckPolicyEnvironment(exactOutput, "KANO_SESSION_TEST_EMPTY", "");
+    CheckPolicyEnvironment(exactOutput, "FORWARDED_ALLOW_IPS", "");
+    Check(session.Close().cleanup_complete, "exact environment policy cleanup");
+
+    options.environment.clear();
+    Check(session.Start(options).ok, "empty exact environment launch");
+    const auto emptyOutput = Until(session, "FORWARDED_ALLOW_IPS=");
+    for (const char* name : {"KANO_SESSION_TEST_INHERITED", "KANO_SESSION_TEST_OVERRIDE",
+             "KANO_SESSION_TEST_REMOVED", "KANO_SESSION_TEST_EMPTY", "FORWARDED_ALLOW_IPS"})
+        CheckPolicyEnvironment(emptyOutput, name, nullptr);
+    Check(session.Close().cleanup_complete, "empty exact environment cleanup");
+#ifdef _WIN32
+    char directory[MAX_PATH]{}, path[MAX_PATH]{};
+    const bool created = GetTempPathA(MAX_PATH, directory) &&
+        GetTempFileNameA(directory, "kse", 0, path);
+    Check(created, "create owned detached environment result file");
+    if (created) {
+        options.arguments = {"environment-file", path};
+        options.environment = {{"KANO_SESSION_TEST_OVERRIDE", "detached-value"},
+            {"KANO_SESSION_TEST_EMPTY", ""}, {"FORWARDED_ALLOW_IPS", ""}};
+        const auto launched = LaunchDetached(options);
+        Check(launched.ok, "detached exact environment launch");
+        if (launched.ok) WaitGone(launched.identity);
+        FILE* file = nullptr;
+        Check(fopen_s(&file, path, "rb") == 0 && file, "read owned detached environment result");
+        std::string output;
+        if (file) {
+            char buffer[1024];
+            const auto count = std::fread(buffer, 1, sizeof(buffer), file);
+            output.assign(buffer, count); std::fclose(file);
+        }
+        CheckPolicyEnvironment(output, "KANO_SESSION_TEST_INHERITED", nullptr);
+        CheckPolicyEnvironment(output, "KANO_SESSION_TEST_OVERRIDE", "detached-value");
+        CheckPolicyEnvironment(output, "KANO_SESSION_TEST_EMPTY", "");
+        CheckPolicyEnvironment(output, "FORWARDED_ALLOW_IPS", "");
+        Check(DeleteFileA(path) != FALSE, "remove only owned detached environment result file");
+    }
+#endif
+    const std::pair<const char*, const char*> expected[] = {
+        {"KANO_SESSION_TEST_INHERITED", "parent-inherited"}, {"KANO_SESSION_TEST_OVERRIDE", "parent-override"},
+        {"KANO_SESSION_TEST_REMOVED", "parent-remove"}, {"KANO_SESSION_TEST_EMPTY", "parent-empty"},
+        {"FORWARDED_ALLOW_IPS", "parent-forwarded"}};
+    for (const auto& entry : expected) {
+        std::string value;
+        Check(PolicyEnvironmentValue(entry.first, value) && value == entry.second,
+            "child environment policy preserves the parent environment");
+    }
+}
+
 int main() {
     kano::infra::ConfigureUnattendedExecution();
+    RunEnvironmentPolicyTests();
 #ifdef _WIN32
     const auto self = CurrentIdentity();
     Check(self.pid && self.creation_time && !self.executable.empty() && IsAlive(self), "current exact identity");
