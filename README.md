@@ -274,6 +274,13 @@ that inheritance option. Existing ancestry checks are not a race-proof sandbox.
 
 ### Owned user services
 
+`Definition` defaults retain on-failure restart and discarded output. Opt into
+`RestartPolicy::Always` for unconditional restart. LaunchAgents additionally
+support `background` and absolute `stdout_path`/`stderr_path` values. These fields
+participate in exact artifact ownership checks; they do not authorize replacing
+an existing definition. The throttle remains ten seconds. Systemd supports the
+restart policy but rejects LaunchAgent-only background/log settings.
+
 Set `KANO_INFRA_ENABLE_USER_SERVICE=ON` before adding infra, then link
 `KanoInfra::user_service` and include `kano_user_service.hpp`. This target is not
 part of `KanoInfra::All`. `Definition` contains a backend, identity, artifact,
@@ -287,8 +294,11 @@ the expected artifact bytes and exact loaded source/program/argv ownership.
 LaunchAgent exit 113 alone identifies unloaded state. The systemd adapter checks
 all six requested show properties, including `FragmentPath` and the serialized
 `ExecStart`; it accepts only unquoted safe tokens and refuses whitespace or `%`
-in Linux paths/arguments. Denied, malformed, ambiguous, or transitional states
-fail closed. `Stop` confirms unload/inactivity before returning; artifact removal
+in Linux paths/arguments. An exact-owned `xpcproxy` observation with a positive
+PID is polled within the same decreasing operation budget; its proxy PID is
+never reported as running/stopped proof. Every poll rechecks artifact ownership.
+Denied, malformed, ambiguous or other transitional states fail closed.
+`Stop` confirms unload/inactivity before returning; artifact removal
 and any subsequent daemon reload remain the consumer's responsibility.
 
 `Runtime` defaults to bounded contained `Session` helpers and monotonic timing;

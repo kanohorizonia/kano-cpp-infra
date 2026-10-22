@@ -365,6 +365,32 @@ TEST_CASE("User service deadlines bound inspect and stop confirmation", "[user_s
     }
 }
 
+TEST_CASE("LaunchAgent exec proxy is bounded and never reported as running proof", "[user_service]") {
+    TemporaryDirectory directory;
+    const auto definition = MakeDefinition(directory, Backend::LaunchAgent); Artifact(definition);
+    ControlledRuntime runtime(Backend::LaunchAgent);
+    runtime.Inspect(definition, State::Absent);
+    runtime.steps.push_back({{"bootstrap", "gui/501", Bytes(definition.artifact)}, {0, ""}});
+    runtime.steps.push_back({InspectArguments(definition), {0, LaunchPrint(definition, "xpcproxy", 312)}});
+    runtime.Inspect(definition, State::Running);
+    CHECK_NOTHROW(kano::service::Register(definition, runtime, 500)); runtime.Complete();
+    CHECK(runtime.sleeps == std::vector<int>{100});
+    ControlledRuntime deadline(Backend::LaunchAgent);
+    deadline.steps.push_back({InspectArguments(definition), {0, LaunchPrint(definition, "xpcproxy", 312)}});
+    deadline.steps.push_back({InspectArguments(definition), {0, LaunchPrint(definition, "xpcproxy", 312)}});
+    CHECK_THROWS_WITH(kano::service::Inspect(definition, deadline, 200), kDeadlineError); deadline.Complete();
+    CHECK((deadline.sleeps == std::vector<int>{100, 100}));
+    for (const auto mode : {"no-pid", "foreign-program", "unknown-state"}) {
+        ControlledRuntime invalid(Backend::LaunchAgent);
+        auto print = LaunchPrint(definition, mode == std::string("unknown-state") ? "unrecognized" : "xpcproxy", mode == std::string("no-pid") ? 0 : 312);
+        if (mode == std::string("foreign-program")) Replace(print, "program = " + Bytes(definition.executable), "program = /foreign/child");
+        invalid.steps.push_back({InspectArguments(definition), {0, print}});
+        CHECK_THROWS_WITH(kano::service::Stop(definition, invalid, 500), kOwnershipError); invalid.Complete();
+        CHECK(invalid.sleeps.empty());
+    }
+    CHECK(fs::exists(definition.artifact));
+}
+
 TEST_CASE("LaunchAgent restart permits throttle time within one decreasing operation budget", "[user_service]") {
     TemporaryDirectory directory;
     const auto definition = MakeDefinition(directory, Backend::LaunchAgent);
@@ -508,6 +534,44 @@ TEST_CASE("Windows refuses direct exec and inherited file locks", "[process][loc
                       "Direct process replacement is unavailable or failed.");
 }
 #endif
+
+TEST_CASE("LaunchAgent opt-in restart background and log settings preserve exact ownership", "[user_service]") {
+    TemporaryDirectory directory;
+    auto definition = MakeDefinition(directory, Backend::LaunchAgent);
+    const auto original = kano::service::Render(definition);
+    CHECK(original.find("<key>SuccessfulExit</key><false/>") != std::string::npos);
+    definition.restart = kano::service::RestartPolicy::Always;
+    definition.background = true;
+    definition.stdout_path = directory.root / "out&metadata.log";
+    definition.stderr_path = directory.root / "err&metadata.log";
+    const auto rendered = kano::service::Render(definition);
+    CHECK(rendered.find("<key>KeepAlive</key><true/>") != std::string::npos);
+    CHECK(rendered.find("<key>ProcessType</key><string>Background</string>") != std::string::npos);
+    CHECK(rendered.find("out&amp;metadata.log") != std::string::npos);
+    CHECK(rendered.find("err&amp;metadata.log") != std::string::npos);
+    Artifact(definition);
+    ControlledRuntime runtime(Backend::LaunchAgent);
+    runtime.Inspect(definition, State::Running);
+    CHECK(kano::service::Inspect(definition, runtime, 1000).pid == 312);
+    runtime.Complete();
+    auto changed = definition;
+    changed.restart = kano::service::RestartPolicy::OnFailure;
+    CHECK_THROWS_WITH(kano::service::Stop(changed, runtime, 1000), kOwnershipError);
+    changed = definition; changed.background = false;
+    CHECK_THROWS_WITH(kano::service::Stop(changed, runtime, 1000), kOwnershipError);
+    changed = definition; changed.stdout_path = directory.root / "different-out.log";
+    CHECK_THROWS_WITH(kano::service::Stop(changed, runtime, 1000), kOwnershipError);
+    changed = definition; changed.stderr_path = directory.root / "different-err.log";
+    CHECK_THROWS_WITH(kano::service::Stop(changed, runtime, 1000), kOwnershipError);
+    changed = definition;
+    changed.stdout_path = "relative.log";
+    CHECK_THROWS(kano::service::Render(changed));
+    changed = MakeDefinition(directory, Backend::SystemdUser);
+    changed.restart = kano::service::RestartPolicy::Always;
+    CHECK(kano::service::Render(changed).find("Restart=always") != std::string::npos);
+    changed.background = true;
+    CHECK_THROWS(kano::service::Render(changed));
+}
 
 int main(int argc, char** argv) {
     kano::infra::ConfigureUnattendedExecution();

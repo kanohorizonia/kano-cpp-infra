@@ -6,6 +6,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -27,6 +28,13 @@ bool LinuxToken(const std::string& InText) {
     });
 }
 void Validate(const Definition& InDefinition) {
+    if (InDefinition.restart != RestartPolicy::OnFailure && InDefinition.restart != RestartPolicy::Always) Fail();
+    for (const auto& path : {InDefinition.stdout_path, InDefinition.stderr_path}) {
+        if (!path.empty()) {
+            if (!Text(Bytes(path))) Fail();
+            kano::platform::LocalPath(path);
+        }
+    }
     if (InDefinition.identity.empty() || InDefinition.identity.size() > 240 ||
         !std::all_of(InDefinition.identity.begin(), InDefinition.identity.end(), [](unsigned char value) {
             return std::isalnum(value) || value == '.' || value == '-' || value == '_';
@@ -37,6 +45,7 @@ void Validate(const Definition& InDefinition) {
     }
     for (const auto& argument : InDefinition.arguments) if (!Text(argument)) Fail();
     if (InDefinition.backend == Backend::SystemdUser) {
+        if (InDefinition.background || !InDefinition.stdout_path.empty() || !InDefinition.stderr_path.empty()) Fail();
         if (InDefinition.identity.size() < 9 || InDefinition.identity.substr(InDefinition.identity.size() - 8) != ".service") Fail();
         for (const auto& path : {InDefinition.artifact, InDefinition.executable, InDefinition.working_directory}) if (!LinuxToken(Bytes(path))) Fail();
         for (const auto& argument : InDefinition.arguments) if (!LinuxToken(argument)) Fail();
@@ -63,13 +72,17 @@ std::string RenderImpl(const Definition& InDefinition) {
         result += "<key>Label</key><string>" + Xml(InDefinition.identity) + "</string>\n<key>ProgramArguments</key><array>\n<string>" + Xml(Bytes(InDefinition.executable)) + "</string>\n";
         for (const auto& argument : InDefinition.arguments) result += "<string>" + Xml(argument) + "</string>\n";
         result += "</array>\n<key>WorkingDirectory</key><string>" + Xml(Bytes(InDefinition.working_directory)) + "</string>\n";
-        result += "<key>RunAtLoad</key><true/>\n<key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>ThrottleInterval</key><integer>10</integer>\n";
-        result += "<key>StandardOutPath</key><string>/dev/null</string>\n<key>StandardErrorPath</key><string>/dev/null</string>\n</dict></plist>\n";
+        result += "<key>RunAtLoad</key><true/>\n<key>KeepAlive</key>";
+        result += InDefinition.restart == RestartPolicy::Always ? "<true/>\n" : "<dict><key>SuccessfulExit</key><false/></dict>\n";
+        result += "<key>ThrottleInterval</key><integer>10</integer>\n";
+        if (InDefinition.background) result += "<key>ProcessType</key><string>Background</string>\n";
+        result += "<key>StandardOutPath</key><string>" + Xml(InDefinition.stdout_path.empty() ? "/dev/null" : Bytes(InDefinition.stdout_path)) + "</string>\n";
+        result += "<key>StandardErrorPath</key><string>" + Xml(InDefinition.stderr_path.empty() ? "/dev/null" : Bytes(InDefinition.stderr_path)) + "</string>\n</dict></plist>\n";
         return result;
     }
     std::string result = "[Unit]\nDescription=Owned user service\n\n[Service]\nType=simple\nWorkingDirectory=" + Bytes(InDefinition.working_directory) + "\nExecStart=" + Bytes(InDefinition.executable);
     for (const auto& argument : InDefinition.arguments) result += " " + argument;
-    return result + "\nRestart=on-failure\nRestartSec=10\nUMask=0077\nNoNewPrivileges=yes\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n";
+    return result + "\nRestart=" + (InDefinition.restart == RestartPolicy::Always ? "always" : "on-failure") + "\nRestartSec=10\nUMask=0077\nNoNewPrivileges=yes\nStandardOutput=null\nStandardError=null\n\n[Install]\nWantedBy=default.target\n";
 }
 bool Artifact(const Definition& InDefinition) {
     std::error_code error;
@@ -117,12 +130,19 @@ public:
     std::string Target() const { return Domain() + "/" + mDefinition.identity; }
     void Must(const std::vector<std::string>& InArguments, int InMaximumMs = 5000) { if (Command(InArguments, InMaximumMs).exit_code != 0) Fail(); }
     Observation Inspect() {
-        const bool bArtifact = Artifact(mDefinition);
-        return mDefinition.backend == Backend::LaunchAgent ? LaunchState(bArtifact) : LinuxState(bArtifact);
+        if (mDefinition.backend != Backend::LaunchAgent) return LinuxState(Artifact(mDefinition));
+        while (true) {
+            const auto state = LaunchState(Artifact(mDefinition));
+            if (state) return *state;
+            // launchd's exec proxy has a PID before the requested executable
+            // runs. Recheck exact ownership within this operation's deadline;
+            // never publish that proxy PID as running or stopped proof.
+            mRuntime.Sleep(std::min(Budget(), 100));
+        }
     }
-    Observation LaunchState(bool InArtifact) {
+    std::optional<Observation> LaunchState(bool InArtifact) {
         const auto result = Command({"print", Target()});
-        if (result.exit_code == 113) return {};
+        if (result.exit_code == 113) return Observation{};
         if (result.exit_code != 0 || !InArtifact) Fail();
         std::istringstream input(result.output);
         std::string line, program, path, state;
@@ -159,10 +179,11 @@ public:
         expected.insert(expected.begin(), Bytes(mDefinition.executable));
         if (programs != 1 || paths != 1 || arrays != 1 || states != 1 || pids > 1 || bInArguments || depth != 0 || roots != 1 ||
             program != Bytes(mDefinition.executable) || path != Bytes(mDefinition.artifact) || arguments != expected) Fail();
-        if (state == "running") { if (pids != 1 || pid == 0) Fail(); return {State::Running, pid}; }
+        if (state == "running") { if (pids != 1 || pid == 0) Fail(); return Observation{State::Running, pid}; }
+        if (state == "xpcproxy") { if (pids != 1 || pid == 0) Fail(); return std::nullopt; }
         if (state != "waiting" && state != "exited" && state != "not running" && state != "spawn scheduled") Fail();
         if (pid != 0) Fail();
-        return {State::Stopped, 0};
+        return Observation{State::Stopped, 0};
     }
     Observation LinuxState(bool InArtifact) {
         const auto result = Command({"--user", "show", mDefinition.identity, "--no-pager", "--property=LoadState,ActiveState,SubState,MainPID,FragmentPath,ExecStart"});
