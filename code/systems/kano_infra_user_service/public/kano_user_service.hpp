@@ -10,6 +10,7 @@ namespace kano::service {
 
 enum class Backend { LaunchAgent, SystemdUser };
 enum class State { Absent, Stopped, Running };
+enum class RestartPolicy { OnFailure, Always };
 
 struct Definition {
     Backend backend = Backend::LaunchAgent;
@@ -19,6 +20,10 @@ struct Definition {
     std::filesystem::path working_directory;
     std::vector<std::string> arguments; // excludes executable
     unsigned uid = 0;
+    // Opt-in LaunchAgent settings. Defaults retain the published rendering.
+    RestartPolicy restart = RestartPolicy::OnFailure;
+    bool background = false;
+    std::filesystem::path stdout_path, stderr_path;
 };
 
 struct Observation {
