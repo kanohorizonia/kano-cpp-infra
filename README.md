@@ -93,6 +93,9 @@ Public CMake targets currently include:
 - `KanoInfra::self`
 - `KanoInfra::timing`
 - `KanoInfra::unattended`
+- `KanoInfra::user_service` (opt-in owned LaunchAgent/systemd user adapter)
+- `KanoInfra::toml` (opt-in full TOML validation and semantic table edits)
+- `KanoInfra::toml` (opt-in strict validation using the existing toml11 pin)
 
 ## Loopback listener snapshots
 
@@ -253,6 +256,60 @@ input, noisy stderr, failed launch/containment, exact identity, owned descendant
 cleanup, abrupt owner death, and detached caller exit. Consumers may set
 `KANO_PROCESS_SESSION_TEST_LABELS` before adding `code/tests/process_session`
 to include this contract in a focused gate.
+
+### Direct replacement and exclusive run locks
+
+`kano_process_replace.hpp` exports POSIX `kano::process::ReplaceProcess`.
+It uses `execve` directly, preserving PID and terminal/service streams. It copies
+the inherited environment before applying exact overrides (including empty
+values) and removals; it does not change the caller's environment or capture
+output. Windows refuses direct replacement explicitly.
+
+`kano_file_lock.hpp` exports movable `kano::platform::ExclusiveFileLock`.
+`TryAcquire` returns an empty optional only for a busy lock. It rejects relative,
+symlink/reparse, nonregular, or unavailable paths, uses a private new file, and
+retains the file on release. POSIX `inheritThroughExec=true` keeps the locked
+descriptor across replacement. Windows uses share-deny ownership and refuses
+that inheritance option. Existing ancestry checks are not a race-proof sandbox.
+
+### Owned user services
+
+Set `KANO_INFRA_ENABLE_USER_SERVICE=ON` before adding infra, then link
+`KanoInfra::user_service` and include `kano_user_service.hpp`. This target is not
+part of `KanoInfra::All`. `Definition` contains a backend, identity, artifact,
+executable, working directory, exact arguments excluding the executable, and
+user ID. `Render` returns plist or systemd unit bytes without writing them.
+Both streams go to the null device; retry-on-failure uses a ten-second delay.
+
+The consumer creates a private artifact, then calls `Inspect`, `Register`,
+`Restart`, or `Stop` with one positive operation budget. Every mutation requires
+the expected artifact bytes and exact loaded source/program/argv ownership.
+LaunchAgent exit 113 alone identifies unloaded state. The systemd adapter checks
+all six requested show properties, including `FragmentPath` and the serialized
+`ExecStart`; it accepts only unquoted safe tokens and refuses whitespace or `%`
+in Linux paths/arguments. Denied, malformed, ambiguous, or transitional states
+fail closed. `Stop` confirms unload/inactivity before returning; artifact removal
+and any subsequent daemon reload remain the consumer's responsibility.
+
+`Runtime` defaults to bounded contained `Session` helpers and monotonic timing;
+controlled tests can override it without contacting a service manager. The
+adapter provides no installer, authentication policy, readiness protocol,
+lingering mutation, or process-discovery termination fallback. The focused
+`infra.user_service` Catch2 test uses simulated service-manager output and
+compiled child processes; fixture success does not establish actual OS service
+lifecycle qualification.
+
+### Full TOML table edits
+
+Set `KANO_INFRA_ENABLE_TOML=ON`, link `KanoInfra::toml`, and include
+`kano_toml.hpp`. The opt-in facade reuses the existing toml11 v3.7.1 pin.
+`IsValidToml` checks full TOML syntax and duplicate definitions.
+`RewriteTomlTable` edits string and string-array fields in one table, preserving
+all other semantic values. Formatting and comments may change; consumers that
+need rollback must retain the original bytes. Existing target fields must have
+the requested types. Inputs are bounded to 16 MiB, and errors contain no source
+text. The facade performs no filesystem access and is outside `KanoInfra::All`.
+The focused Catch2 contract is `infra.toml`.
 
 ## Tooling
 

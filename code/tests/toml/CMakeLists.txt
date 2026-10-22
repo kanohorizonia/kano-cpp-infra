@@ -1,0 +1,18 @@
+if(NOT TARGET Catch2::Catch2)
+    find_package(Catch2 3.5.2 CONFIG QUIET)
+endif()
+if(NOT TARGET Catch2::Catch2)
+    include(FetchContent)
+    FetchContent_Declare(kano_infra_test_catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG v3.5.2 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(kano_infra_test_catch2)
+endif()
+add_executable(kano_toml_tests toml_tests.cpp)
+target_link_libraries(kano_toml_tests PRIVATE KanoInfra::toml Catch2::Catch2 KanoInfra::unattended)
+include(FetchContent)
+FetchContent_GetProperties(toml11 SOURCE_DIR toml11_SOURCE_DIR)
+target_include_directories(kano_toml_tests PRIVATE "${toml11_SOURCE_DIR}")
+add_test(NAME infra.toml COMMAND kano_toml_tests)
+kano_infra_test_properties(properties 30)
+set_tests_properties(infra.toml PROPERTIES ${properties} LABELS "toml;config")

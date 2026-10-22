@@ -14,7 +14,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/KanoInfraUnattended.cmake")
 
 # Preserve source-tree names with imported interfaces supported by CMake 3.16.
 # The unattended target exports its public name directly.
-foreach(_module config build_info platform process scheduler diagnostics self timing)
+foreach(_module config build_info platform process scheduler diagnostics self timing user_service toml)
     if(TARGET "KanoInfra::kano_infra_${_module}" AND NOT TARGET "KanoInfra::${_module}")
         add_library("KanoInfra::${_module}" INTERFACE IMPORTED)
         set_property(TARGET "KanoInfra::${_module}" PROPERTY
