@@ -4,6 +4,8 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     project(kano-infra-unattended-contract LANGUAGES C CXX)
     enable_testing()
     include("${CMAKE_CURRENT_LIST_DIR}/../../scripts/cmake/KanoInfraUnattended.cmake")
+    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../systems/kano_infra_platform"
+                     "${CMAKE_CURRENT_BINARY_DIR}/platform")
     add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../systems/kano_infra_process"
                      "${CMAKE_CURRENT_BINARY_DIR}/process")
 endif()
@@ -147,4 +149,10 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/unattended_process/unattended_process_test.
 endif()
 
 add_subdirectory(process_session)
+if(TARGET KanoInfra::user_service)
+    add_subdirectory(user_service)
+endif()
+if(TARGET KanoInfra::toml)
+    add_subdirectory(toml)
+endif()
 kano_infra_finalize_test_timeouts(10)
