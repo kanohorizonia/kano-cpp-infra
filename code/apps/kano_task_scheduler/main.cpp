@@ -76,7 +76,15 @@ std::string PrincipalSid(const std::string& name) {
     LPWSTR raw = nullptr; if (!ConvertSidToStringSidW(sid.data(), &raw)) throw std::runtime_error("Principal SID conversion failed.");
     Bstr result(raw); LocalFree(raw); return Narrow(result);
 }
-Json::Value Projection(ITaskDefinition* definition) {
+int ProjectionVersion(const Json::Value& request) {
+    if (!request.isMember("projection_version")) return 1;
+    const auto& version = request["projection_version"];
+    if ((version.type() != Json::intValue && version.type() != Json::uintValue) ||
+        !version.isInt() || (version.asInt() != 1 && version.asInt() != 2))
+        throw std::runtime_error("Unsupported scheduler projection_version; expected integer 1 or 2.");
+    return version.asInt();
+}
+Json::Value Projection(ITaskDefinition* definition, int version) {
     Json::Value value;
     ComPtr<IRegistrationInfo> registration; Check(definition->get_RegistrationInfo(&registration));
     value["description"] = Text(registration.Get(), &IRegistrationInfo::get_Description);
@@ -127,10 +135,15 @@ Json::Value Projection(ITaskDefinition* definition) {
     value["idle_only"] = Flag(settings.Get(), &ITaskSettings::get_RunOnlyIfIdle);
     value["network_only"] = Flag(settings.Get(), &ITaskSettings::get_RunOnlyIfNetworkAvailable);
     value["hidden"] = Flag(settings.Get(), &ITaskSettings::get_Hidden);
+    if (version == 2) {
+        ComPtr<ITaskSettings2> settings2; Check(settings.As(&settings2));
+        value["unified_engine"] = Flag(settings2.Get(), &ITaskSettings2::get_UseUnifiedSchedulingEngine);
+    }
     // Enabled is mutable control state, intentionally separate from definition.
     return value;
 }
 Json::Value Execute(const Json::Value& request) {
+    const auto projectionVersion = ProjectionVersion(request);
     Json::Value result; result["ok"] = true; result["user"] = Sid();
     const auto integrity = IntegrityRid(); result["integrity_rid"] = Json::UInt(integrity);
     const auto operation = request["operation"].asString();
@@ -142,7 +155,7 @@ Json::Value Execute(const Json::Value& request) {
     phase = "COM activation"; ComPtr<ITaskService> service; Check(CoCreateInstance(CLSID_TaskScheduler, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&service)));
     phase = "scheduler connection"; VARIANT empty; VariantInit(&empty); Check(service->Connect(empty, empty, empty, empty));
     auto definition = [&] { phase = "new definition"; ComPtr<ITaskDefinition> d; Check(service->NewTask(0, &d)); phase = "XML import"; Check(d->put_XmlText(Bstr(Wide(request["xml"].asString())))); phase = "definition projection"; return d; };
-    if (operation == "project") { auto d = definition(); result["projection"] = Projection(d.Get());
+    if (operation == "project") { auto d = definition(); result["projection"] = Projection(d.Get(), projectionVersion);
         ComPtr<ITaskSettings> settings; Check(d->get_Settings(&settings)); result["enabled"] = Flag(settings.Get(), &ITaskSettings::get_Enabled); return result; }
     phase = "root folder read"; ComPtr<ITaskFolder> folder; Bstr root(L"\\");
     Check(service->GetFolder(root.value, &folder), integrity);
@@ -152,7 +165,7 @@ Json::Value Execute(const Json::Value& request) {
         result["found"] = false;
     } else { Check(found); result["found"] = true; }
     if (task) {
-        ComPtr<ITaskDefinition> d; Check(task->get_Definition(&d)); result["projection"] = Projection(d.Get());
+        ComPtr<ITaskDefinition> d; Check(task->get_Definition(&d)); result["projection"] = Projection(d.Get(), projectionVersion);
         TASK_STATE state; Check(task->get_State(&state)); result["state"] = static_cast<int>(state);
         result["enabled"] = Flag(task.Get(), &IRegisteredTask::get_Enabled);
         result["last_result"] = Number(task.Get(), &IRegisteredTask::get_LastTaskResult);
@@ -160,7 +173,7 @@ Json::Value Execute(const Json::Value& request) {
     if (operation == "read") return result;
     if (operation == "register") {
         if (task) throw std::runtime_error("Task already exists; registration does not overwrite.");
-        auto d = definition(); if (Projection(d.Get()) != request["expected"]) throw std::runtime_error("Task XML projection mismatch.");
+        auto d = definition(); if (Projection(d.Get(), projectionVersion) != request["expected"]) throw std::runtime_error("Task XML projection mismatch.");
         ComPtr<IPrincipal> principal; Check(d->get_Principal(&principal)); TASK_LOGON_TYPE logon; Check(principal->get_LogonType(&logon));
         // No credentials or elevation mechanism. S4U may be refused by the OS.
         Check(folder->RegisterTaskDefinition(Bstr(Wide(name)), d.Get(), TASK_CREATE, empty, empty, logon, empty, &task));
