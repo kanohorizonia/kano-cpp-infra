@@ -262,6 +262,7 @@ bool PosixText(const std::string& InText) {
 
 bool Validate(const SessionOptions& InOptions) {
     if (InOptions.executable.empty() || InOptions.executable.front() != '/' ||
+        InOptions.disable_extension_points ||
         InOptions.startup_timeout_ms <= 0 || InOptions.cleanup_timeout_ms <= 0 ||
         !InOptions.stdout_max_bytes || !InOptions.stderr_max_bytes ||
         InOptions.stdout_max_bytes == (size_t)-1 || InOptions.stderr_max_bytes == (size_t)-1 ||
@@ -382,7 +383,8 @@ SessionResult Session::Start(const SessionOptions& InOptions) {
     HANDLE childInput = nullptr;
     if (!InputPipe(mImpl->input, childInput)) return SessionError("Cannot create process input", GetLastError());
     KanoProcessSessionLaunch extra{childInput, launch.environment.data(), launch.executable.c_str(),
-        &launch.command[0], launch.directory.empty() ? nullptr : launch.directory.c_str()};
+        &launch.command[0], launch.directory.empty() ? nullptr : launch.directory.c_str(),
+        InOptions.disable_extension_points};
     KanoUnattendedProcessResult spawned{};
     spawned.status = KANO_UNATTENDED_PROCESS_COMPLETED;
     spawned.cleanup_complete = true;
@@ -865,6 +867,10 @@ bool QueryParent(const Identity& InIdentity, std::uint64_t& OutParent) {
 DetachedResult LaunchDetached(const SessionOptions& InOptions) {
     DetachedResult result;
 #ifdef _WIN32
+    if (InOptions.disable_extension_points) {
+        result.message = "Extension-point creation policy requires a contained Session";
+        return result;
+    }
     if (!Validate(InOptions)) { result.message = "Invalid detached launch options"; return result; }
     const long long deadline = kano_process_now_ms() + InOptions.startup_timeout_ms;
     LaunchText launch;
