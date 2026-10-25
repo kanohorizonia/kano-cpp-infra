@@ -54,6 +54,12 @@ void kano_process_free(KanoProcess proc);
 #ifdef KANO_PROCESS_TESTING
 static bool kano_process_fail_containment_setup = false;
 static bool kano_process_fail_launch_cleanup_confirmation = false;
+#ifdef _WIN32
+static bool kano_process_fail_mitigation_setup = false;
+extern "C" void kano_process_test_fail_next_mitigation_setup(void) {
+    kano_process_fail_mitigation_setup = true;
+}
+#endif
 void kano_process_test_fail_next_containment_setup(void) {
     kano_process_fail_containment_setup = true;
 }
@@ -79,6 +85,7 @@ struct KanoProcessSessionLaunch {
     const wchar_t* executable;
     wchar_t* command_line;
     const wchar_t* working_dir;
+    bool disable_extension_points;
 };
 
 static BOOL kano_process_create_session_child(KanoProcessSessionLaunch* launch,
@@ -91,10 +98,11 @@ static BOOL kano_process_create_session_child(KanoProcessSessionLaunch* launch,
     startup.StartupInfo.hStdOutput = stdout_write;
     startup.StartupInfo.hStdError = stderr_write;
     SIZE_T size = 0;
-    InitializeProcThreadAttributeList(NULL, 1, 0, &size);
+    const DWORD attribute_count = launch->disable_extension_points ? 2 : 1;
+    InitializeProcThreadAttributeList(NULL, attribute_count, 0, &size);
     startup.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(size);
     if (!startup.lpAttributeList) { SetLastError(ERROR_OUTOFMEMORY); return FALSE; }
-    if (!InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &size)) {
+    if (!InitializeProcThreadAttributeList(startup.lpAttributeList, attribute_count, 0, &size)) {
         const DWORD error = GetLastError();
         free(startup.lpAttributeList);
         SetLastError(error);
@@ -103,6 +111,18 @@ static BOOL kano_process_create_session_child(KanoProcessSessionLaunch* launch,
     HANDLE inherited[] = {launch->stdin_read, stdout_write, stderr_write};
     BOOL ok = UpdateProcThreadAttribute(startup.lpAttributeList, 0,
         PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), NULL, NULL);
+    DWORD64 mitigation = PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON;
+    if (ok && launch->disable_extension_points) {
+#ifdef KANO_PROCESS_TESTING
+        if (kano_process_fail_mitigation_setup) {
+            kano_process_fail_mitigation_setup = false;
+            SetLastError(ERROR_NOT_SUPPORTED);
+            ok = FALSE;
+        } else
+#endif
+        ok = UpdateProcThreadAttribute(startup.lpAttributeList, 0,
+            PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &mitigation, sizeof(mitigation), NULL, NULL);
+    }
     if (ok) {
         ok = CreateProcessW(launch->executable, launch->command_line, NULL, NULL, TRUE,
             CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT |

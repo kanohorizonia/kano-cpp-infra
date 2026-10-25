@@ -29,6 +29,9 @@ struct SessionOptions {
     std::size_t stdout_max_bytes = 65536; // per operation, both must be positive
     std::size_t stderr_max_bytes = 65536;
     bool inherit_environment = true;
+    // Windows contained Sessions only: disable extension points at creation.
+    // Unsupported for detached launches and non-Windows Sessions.
+    bool disable_extension_points = false;
 };
 
 struct SessionResult {

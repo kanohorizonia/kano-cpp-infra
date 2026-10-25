@@ -34,6 +34,13 @@ static int ReportEnvironment(FILE* InOutput) {
 int main(int argc, char** argv) {
     kano::infra::ConfigureUnattendedExecution();
     const std::string mode = argc > 1 ? argv[1] : "echo";
+    if (mode == "mitigation-policy") {
+        PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY policy{};
+        if (!GetProcessMitigationPolicy(GetCurrentProcess(), ProcessExtensionPointDisablePolicy,
+            &policy, sizeof(policy))) return 10;
+        std::printf("extension_policy=%lu\n", static_cast<unsigned long>(policy.Flags));
+        std::fflush(stdout);
+    }
     if (mode == "environment-policy") return ReportEnvironment(stdout);
     if (mode == "environment-file") {
         if (argc != 3) return 2;

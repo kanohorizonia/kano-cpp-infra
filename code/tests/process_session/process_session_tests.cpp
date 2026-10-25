@@ -7,6 +7,7 @@
 #include <string>
 #ifdef _WIN32
 #include <windows.h>
+extern "C" void kano_process_test_fail_next_mitigation_setup(void);
 #else
 #include <atomic>
 #include <cerrno>
@@ -643,8 +644,73 @@ static void RunEnvironmentPolicyTests() {
     }
 }
 
-int main() {
+#ifdef _WIN32
+static void RunMitigationPolicyTests() {
+    PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY parentBefore{};
+    Check(GetProcessMitigationPolicy(GetCurrentProcess(), ProcessExtensionPointDisablePolicy,
+        &parentBefore, sizeof(parentBefore)) != 0, "read parent extension-point policy");
+    unsigned long defaultPolicy = 0;
+    for (int variant = 0; variant < 3; ++variant) {
+        Session session;
+        auto options = Options("mitigation-policy");
+        if (variant == 1) options.disable_extension_points = false;
+        if (variant == 2) options.disable_extension_points = true;
+        const auto started = session.Start(options);
+        Check(started.ok, "extension-point child starts within Session");
+        if (!started.ok) { Check(session.Close().cleanup_complete, "failed policy launch cleanup"); continue; }
+        const auto identity = session.GetIdentity();
+        Check(identity.pid && identity.creation_time && IsAlive(identity), "policy child retains live exact identity");
+        const auto output = started.stdout_data + Until(session, "extension_policy=");
+        unsigned long observed = 2;
+        Check(std::sscanf(output.c_str(), "extension_policy=%lu", &observed) == 1 && observed <= 1,
+            "child reports actual extension-point policy");
+        if (variant == 0) defaultPolicy = observed;
+        if (variant == 1) Check(observed == defaultPolicy, "explicit false preserves default creation policy");
+        if (variant == 2) Check(observed == 1, "requested child extension-point policy is enabled at creation");
+        const auto closed = session.Stop(700);
+        Check(closed.ok && closed.cleanup_complete && !closed.running, "policy child owned cleanup is complete");
+        WaitGone(identity);
+    }
+    {
+        char temporary[MAX_PATH]{}, marker[MAX_PATH]{};
+        Check(GetTempPathA(MAX_PATH, temporary) != 0 && GetTempFileNameA(temporary, "kmp", 0, marker) != 0,
+            "prepare owned mitigation-refusal marker path");
+        if (*marker) {
+            Check(DeleteFileA(marker) != 0, "remove initial marker placeholder");
+            Session session; auto options = Options("mark");
+            options.arguments.push_back(marker); options.disable_extension_points = true;
+            kano_process_test_fail_next_mitigation_setup();
+            const auto result = session.Start(options);
+            Check(!result.ok && result.cleanup_complete && result.system_error == ERROR_NOT_SUPPORTED,
+                "mitigation attribute failure refuses before child creation");
+            Check(GetFileAttributesA(marker) == INVALID_FILE_ATTRIBUTES && GetLastError() == ERROR_FILE_NOT_FOUND,
+                "failed mitigation setup never executes payload");
+            Check(!session.GetIdentity().pid && session.Close().cleanup_complete,
+                "mitigation refusal retains no child or ambiguous cleanup");
+            const auto detached = LaunchDetached(options);
+            Check(!detached.ok && !detached.identity.pid, "detached launch refuses unsupported creation policy");
+            Check(GetFileAttributesA(marker) == INVALID_FILE_ATTRIBUTES && GetLastError() == ERROR_FILE_NOT_FOUND,
+                "detached policy refusal never executes payload");
+        }
+    }
+    PROCESS_MITIGATION_EXTENSION_POINT_DISABLE_POLICY parentAfter{};
+    Check(GetProcessMitigationPolicy(GetCurrentProcess(), ProcessExtensionPointDisablePolicy,
+        &parentAfter, sizeof(parentAfter)) != 0 && parentBefore.Flags == parentAfter.Flags,
+        "child creation leaves parent extension-point policy unchanged");
+}
+#endif
+
+int main(int argc, char** argv) {
     kano::infra::ConfigureUnattendedExecution();
+#ifdef _WIN32
+    RunMitigationPolicyTests();
+    if (argc == 2 && std::string(argv[1]) == "--mitigation-only") {
+        std::printf("process_session_mitigation failures=%d\n", Failures);
+        return Failures ? 1 : 0;
+    }
+#else
+    (void)argc; (void)argv;
+#endif
     RunEnvironmentPolicyTests();
 #ifdef _WIN32
     const auto self = CurrentIdentity();
