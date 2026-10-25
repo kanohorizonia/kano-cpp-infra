@@ -16,6 +16,17 @@ existing contained `Session` with finite operation/capture/cleanup budgets.
 Timed-out mutations require readback before retry. Registration never replaces
 an existing task; mutations compare the supplied task projection first. The
 consumer retains task policy and resident lifecycle ownership.
+Scheduler requests default to projection version 1; explicitly sending
+`"projection_version": 1` returns the same projection. Version 2 is opt-in with
+`"projection_version": 2` and adds the Boolean `unified_engine`, read through
+`ITaskSettings2::UseUnifiedSchedulingEngine`. XML projection, installed-task
+readback and compare-before-mutation use the selected version consistently.
+Version 1 retains its existing fields and does not query this newer interface.
+Only integers 1 and 2 are accepted; malformed or unsupported versions refuse
+before Scheduler activation. Version 2 callers must include the field in their
+complete expected projection. The consumer still owns its task XML/schema,
+setting selection and installation handoff; the helper does not adopt an
+older task or rewrite a setting merely to make an expected projection match.
 The identity response includes the process `integrity_rid`. A failed root read
 includes Low-integrity context when applicable, while preserving the actual
 HRESULT. An inherited Low label on an executable can lower its child process
