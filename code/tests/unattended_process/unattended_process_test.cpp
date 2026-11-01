@@ -9,6 +9,10 @@
 #include <string>
 #ifdef _WIN32
 #include <windows.h>
+#include <winioctl.h>
+#include <cstddef>
+#include <cwchar>
+#include <vector>
 #else
 #include <errno.h>
 #include <signal.h>
@@ -93,6 +97,354 @@ static size_t CheckCapturedProcessesStopped(const KanoUnattendedProcessResult& r
     return unique_pids.size();
 }
 
+#ifdef _WIN32
+static std::wstring ExtendedPath(const std::wstring& path) {
+    return L"\\\\?\\" + path;
+}
+
+static std::string AsciiPath(const std::wstring& path) {
+    std::string result;
+    for (size_t i = 0; i < path.size(); ++i) {
+        if (path[i] > 127) return std::string();
+        result.push_back((char)path[i]);
+    }
+    return result;
+}
+
+static std::wstring ExistingShortPath(const std::wstring& path) {
+    const std::wstring extended = ExtendedPath(path);
+    const DWORD size = GetShortPathNameW(extended.c_str(), NULL, 0);
+    if (!size) return std::wstring();
+    std::vector<wchar_t> buffer(size);
+    const DWORD written = GetShortPathNameW(extended.c_str(), &buffer[0], size);
+    if (!written || written >= size) return std::wstring();
+    std::wstring result(&buffer[0], written);
+    if (result.compare(0, 4, L"\\\\?\\") == 0) result.erase(0, 4);
+    return result;
+}
+
+static std::wstring AbsoluteFixturePath(std::wstring path) {
+    for (size_t i = 0; i < path.size(); ++i)
+        if (path[i] == L'/') path[i] = L'\\';
+    const DWORD size = GetFullPathNameW(path.c_str(), 0, NULL, NULL);
+    if (!size) return std::wstring();
+    std::vector<wchar_t> buffer(size);
+    const DWORD written = GetFullPathNameW(path.c_str(), size, &buffer[0], NULL);
+    if (!written || written >= size) return std::wstring();
+    return std::wstring(&buffer[0], written);
+}
+
+static std::string DirectoryIdentity(const std::wstring& path) {
+    HANDLE directory = CreateFileW(ExtendedPath(path).c_str(), FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (directory == INVALID_HANDLE_VALUE) return std::string();
+    FILE_ID_INFO identity{};
+    const bool identified = GetFileInformationByHandleEx(
+        directory, FileIdInfo, &identity, sizeof(identity)) != FALSE;
+    CloseHandle(directory);
+    if (!identified) return std::string();
+    char volume[18];
+    std::snprintf(volume, sizeof(volume), "%016llx:",
+                  (unsigned long long)identity.VolumeSerialNumber);
+    std::string result(volume);
+    for (size_t i = 0; i < sizeof(identity.FileId.Identifier); ++i) {
+        char byte[3];
+        std::snprintf(byte, sizeof(byte), "%02x", (unsigned int)identity.FileId.Identifier[i]);
+        result += byte;
+    }
+    return result + "\n";
+}
+
+class CwdFixture {
+public:
+    std::wstring root;
+    std::vector<std::wstring> directories;
+    std::vector<std::wstring> files;
+    const char* failure_stage;
+    DWORD failure_error;
+
+    CwdFixture() : failure_stage("GetTempPathW"), failure_error(ERROR_SUCCESS) {
+        wchar_t temporary[32768];
+        const DWORD length = GetTempPathW((DWORD)(sizeof(temporary) / sizeof(temporary[0])), temporary);
+        if (!length || length >= sizeof(temporary) / sizeof(temporary[0])) {
+            failure_error = !length ? GetLastError() : ERROR_INSUFFICIENT_BUFFER;
+            return;
+        }
+        failure_stage = "GetFullPathNameW(temp)";
+        const std::wstring absolute = AbsoluteFixturePath(temporary);
+        if (absolute.empty()) { failure_error = GetLastError(); return; }
+        failure_stage = "GetShortPathNameW(temp)";
+        const std::wstring short_base = ExistingShortPath(absolute);
+        if (short_base.empty()) { failure_error = GetLastError(); return; }
+        std::wstring base = absolute;
+        failure_stage = "temp ASCII local-drive admission";
+        if (base.size() < 3 || base[1] != L':' || AsciiPath(base).empty() || AsciiPath(short_base).empty()) {
+            failure_error = ERROR_INVALID_NAME;
+            return;
+        }
+        if (base.back() != L'\\') base += L'\\';
+        wchar_t name[64];
+        std::swprintf(name, sizeof(name) / sizeof(name[0]), L"k147-%lu-%llu",
+                      GetCurrentProcessId(), (unsigned long long)GetTickCount64());
+        const std::wstring created = base + name;
+        failure_stage = "CreateDirectoryW(root)";
+        if (!CreateDirectoryW(ExtendedPath(created).c_str(), NULL)) {
+            failure_error = GetLastError();
+            return;
+        }
+        directories.push_back(created);
+        failure_stage = "GetShortPathNameW(root)";
+        const std::wstring short_root = ExistingShortPath(created);
+        if (short_root.empty()) { failure_error = GetLastError(); return; }
+        root = created;
+        failure_stage = "root ASCII/length admission";
+        if (root.size() >= 120 || AsciiPath(root).empty() || AsciiPath(short_root).empty()) {
+            failure_error = root.size() >= 120 ? ERROR_FILENAME_EXCED_RANGE : ERROR_NO_UNICODE_TRANSLATION;
+            root.clear();
+        }
+    }
+
+    ~CwdFixture() {
+        for (size_t i = files.size(); i > 0; --i) {
+            const bool removed = DeleteFileW(ExtendedPath(files[i - 1]).c_str()) != FALSE;
+            Check(removed || GetLastError() == ERROR_FILE_NOT_FOUND, "owned CWD marker cleanup");
+        }
+        for (size_t i = directories.size(); i > 0; --i)
+            Check(RemoveDirectoryW(ExtendedPath(directories[i - 1]).c_str()) != FALSE,
+                  "owned CWD directory cleanup");
+    }
+
+    bool AddDirectory(const std::wstring& path) {
+        if (!CreateDirectoryW(ExtendedPath(path).c_str(), NULL)) return false;
+        directories.push_back(path);
+        return true;
+    }
+
+    bool RenameDirectory(const std::wstring& from, const std::wstring& to) {
+        if (!MoveFileExW(ExtendedPath(from).c_str(), ExtendedPath(to).c_str(), 0)) return false;
+        for (size_t i = 0; i < directories.size(); ++i)
+            if (directories[i] == from) directories[i] = to;
+        return true;
+    }
+};
+
+class RestoreCurrentDirectory {
+public:
+    std::vector<wchar_t> original;
+    bool changed;
+    RestoreCurrentDirectory() : changed(false) {
+        const DWORD size = GetCurrentDirectoryW(0, NULL);
+        if (!size) return;
+        original.resize(size);
+        if (!GetCurrentDirectoryW(size, &original[0])) original.clear();
+    }
+    ~RestoreCurrentDirectory() {
+        if (changed) Check(SetCurrentDirectoryW(&original[0]) != FALSE, "test CWD restored");
+    }
+    bool Set(const std::wstring& path) {
+        if (original.empty()) return false;
+        changed = SetCurrentDirectoryW(path.c_str()) != FALSE;
+        return changed;
+    }
+};
+
+static bool CapturedIdentity(const KanoProcessResultV2& result, const std::string& expected) {
+    return !expected.empty() && result.stdout_data && result.stdout_size == expected.size() &&
+           std::memcmp(result.stdout_data, expected.data(), expected.size()) == 0;
+}
+
+static KanoUnattendedProcessOptions CwdOptions(const char* cwd, const char* const* args, size_t count) {
+    KanoUnattendedProcessOptions options{};
+    options.executable = KANO_UNATTENDED_CHILD_PATH;
+    options.working_dir = cwd;
+    options.argv = args;
+    options.argv_count = count;
+    options.mode = KANO_PROCESS_MODE_CAPTURE;
+    options.timeout_ms = 1000;
+    options.cleanup_timeout_ms = 700;
+    options.capture_limits = {1024, 512};
+    return options;
+}
+
+static void CheckCwdIdentity(const std::string& cwd, const std::string& identity, bool unchanged = false) {
+    const char* args[] = {"cwd-id", cwd.c_str()};
+    const KanoUnattendedProcessOptions options = CwdOptions(cwd.c_str(), args, unchanged ? 2 : 1);
+    KanoUnattendedProcessResult result{};
+    Check(kano_process_run_unattended(&options, &result) &&
+          result.status == KANO_UNATTENDED_PROCESS_COMPLETED && result.process.exit_code == 0 &&
+          result.cleanup_complete && CapturedIdentity(result.process, identity),
+          "CWD child runs in the requested physical directory");
+    kano_process_free_unattended_result(&result);
+}
+
+static void CheckCwdRefused(const std::string& cwd, const std::wstring& marker) {
+    const std::string marker_arg = AsciiPath(marker);
+    const char* args[] = {"mark", marker_arg.c_str()};
+    const KanoUnattendedProcessOptions options = CwdOptions(cwd.c_str(), args, 2);
+    KanoUnattendedProcessResult result{};
+    Check(!kano_process_run_unattended(&options, &result) &&
+          result.status == KANO_UNATTENDED_PROCESS_LAUNCH_FAILED && result.system_error != 0 &&
+          result.cleanup_complete, "unsupported CWD fails before launch with native diagnostics");
+    Check(GetFileAttributesW(ExtendedPath(marker).c_str()) == INVALID_FILE_ATTRIBUTES &&
+          GetLastError() == ERROR_FILE_NOT_FOUND, "refused CWD never executes marker child");
+    kano_process_free_unattended_result(&result);
+}
+
+static bool MakeOwnedJunction(const std::wstring& junction, const std::wstring& target) {
+    /* Mount points need no symlink privilege; both endpoints belong to this fixture. */
+    struct MountPointBuffer {
+        DWORD tag;
+        WORD data_length;
+        WORD reserved;
+        WORD substitute_offset;
+        WORD substitute_length;
+        WORD print_offset;
+        WORD print_length;
+        wchar_t path[1024];
+    } buffer{};
+    const std::wstring substitute = L"\\??\\" + target;
+    if (substitute.size() + target.size() + 2 > sizeof(buffer.path) / sizeof(buffer.path[0])) return false;
+    buffer.tag = IO_REPARSE_TAG_MOUNT_POINT;
+    buffer.substitute_length = (WORD)(substitute.size() * sizeof(wchar_t));
+    buffer.print_offset = (WORD)((substitute.size() + 1) * sizeof(wchar_t));
+    buffer.print_length = (WORD)(target.size() * sizeof(wchar_t));
+    std::memcpy(buffer.path, substitute.c_str(), (substitute.size() + 1) * sizeof(wchar_t));
+    std::memcpy((char*)buffer.path + buffer.print_offset, target.c_str(),
+                (target.size() + 1) * sizeof(wchar_t));
+    buffer.data_length = (WORD)(8 + buffer.print_offset + buffer.print_length + sizeof(wchar_t));
+    HANDLE directory = CreateFileW(ExtendedPath(junction).c_str(), GENERIC_WRITE, 0, NULL,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (directory == INVALID_HANDLE_VALUE) return false;
+    DWORD returned = 0;
+    const bool created = DeviceIoControl(directory, FSCTL_SET_REPARSE_POINT, &buffer,
+        (DWORD)(offsetof(MountPointBuffer, path) + buffer.print_offset + buffer.print_length + sizeof(wchar_t)),
+        NULL, 0, &returned, NULL) != FALSE;
+    CloseHandle(directory);
+    return created;
+}
+
+static void CheckLongWorkingDirectories() {
+    CwdFixture fixture;
+    if (fixture.root.empty())
+        std::fprintf(stderr, "CWD fixture setup: stage=%s error=%lu\n",
+                     fixture.failure_stage, fixture.failure_error);
+    Check(!fixture.root.empty(), "fresh ASCII CWD fixture has an existing short root");
+    if (fixture.root.empty()) return;
+
+    CheckCwdIdentity(AsciiPath(fixture.root), DirectoryIdentity(fixture.root), true);
+    const std::wstring parent = fixture.root + L"\\long-parent-component";
+    if (!fixture.AddDirectory(parent)) {
+        Check(false, "long CWD parent created");
+        return;
+    }
+    const std::wstring boundary = parent + L"\\" + std::wstring(257 - parent.size(), L'b');
+    if (!fixture.AddDirectory(boundary)) {
+        Check(false, "258-byte CWD fixture created");
+        return;
+    }
+    const std::string boundary_identity = DirectoryIdentity(boundary);
+    CheckCwdIdentity(AsciiPath(boundary), boundary_identity, true);
+    CheckCwdIdentity(AsciiPath(boundary + L"\\"), boundary_identity);
+
+    const std::wstring target = parent + L"\\" + std::wstring(269 - parent.size(), L'l');
+    if (!fixture.AddDirectory(target)) {
+        Check(false, "long CWD fixture created");
+        return;
+    }
+    const std::wstring short_target = ExistingShortPath(target);
+    const std::string identity = DirectoryIdentity(target);
+    Check(target.size() > 258 && !short_target.empty() && short_target.size() <= 258 &&
+          !AsciiPath(short_target).empty() && !identity.empty(), "long CWD has an existing bounded representation");
+    if (short_target.empty() || short_target.size() > 258 || identity.empty()) return;
+    CheckCwdIdentity(AsciiPath(target), identity);
+    CheckCwdIdentity(AsciiPath(target + L"\\"), identity);
+
+    {
+        RestoreCurrentDirectory restore;
+        const bool changed = restore.Set(parent);
+        Check(changed, "relative CWD fixture base selected");
+        const std::string relative = AsciiPath(target.substr(parent.size() + 1));
+        Check(relative.size() <= 258, "relative supplied CWD remains below the raw limit");
+        if (changed) CheckCwdIdentity(relative, identity);
+    }
+
+    /* The existing Windows legacy API includes argv[0]; unattended argv omits it. */
+    const char* args[] = {KANO_UNATTENDED_CHILD_PATH, "cwd-id"};
+    const std::string target_arg = AsciiPath(target);
+    KanoProcessOptions legacy{};
+    legacy.executable = KANO_UNATTENDED_CHILD_PATH;
+    legacy.working_dir = target_arg.c_str();
+    legacy.argv = args;
+    legacy.argv_count = 2;
+    legacy.mode = KANO_PROCESS_MODE_CAPTURE;
+    KanoProcess process = kano_process_spawn_ex(&legacy);
+    Check(process != NULL, "legacy spawn uses the same long CWD admission");
+    if (process) {
+        KanoProcessCaptureLimitsV2 limits{1024, 512};
+        KanoProcessResultV2 result{};
+        const bool waited = kano_process_wait_v2(process, 1000, &limits, &result);
+        if (!waited || result.exit_code != 0 || !CapturedIdentity(result, identity)) {
+            std::printf("case=legacy-cwd waited=%d exit=%d timeout=%d bytes=%zu/%zu expected=%zu\n",
+                waited ? 1 : 0, result.exit_code, result.timed_out ? 1 : 0,
+                result.stdout_size, result.stderr_size, identity.size());
+            std::printf("legacy-cwd stdout-hex=");
+            for (size_t i = 0; i < result.stdout_size; ++i)
+                std::printf("%02x", (unsigned int)(unsigned char)result.stdout_data[i]);
+            std::printf(" expected-hex=");
+            for (size_t i = 0; i < identity.size(); ++i)
+                std::printf("%02x", (unsigned int)(unsigned char)identity[i]);
+            std::putchar('\n');
+        }
+        Check(waited && result.exit_code == 0 &&
+              CapturedIdentity(result, identity), "legacy long CWD child identity captured");
+        const std::wstring renamed = target + L"-renamed";
+        const bool moved_while_pinned = fixture.RenameDirectory(target, renamed);
+        Check(!moved_while_pinned, "CWD identity remains pinned through process_free");
+        kano_process_free_result_v2(&result);
+        kano_process_free(process);
+        if (moved_while_pinned) {
+            const bool restored = fixture.RenameDirectory(renamed, target);
+            Check(restored, "unexpected early rename restored");
+            if (!restored) return;
+        } else {
+            const bool moved_after_free = fixture.RenameDirectory(target, renamed);
+            Check(moved_after_free, "process_free releases CWD rename protection");
+            if (moved_after_free) {
+                const bool restored = fixture.RenameDirectory(renamed, target);
+                Check(restored, "released CWD directory restored");
+                if (!restored) return;
+            }
+        }
+    }
+
+    std::wstring uncompressible = fixture.root;
+    std::wstring short_uncompressible;
+    for (unsigned int i = 0; i < 40; ++i) {
+        wchar_t component[16];
+        std::swprintf(component, sizeof(component) / sizeof(component[0]), L"\\d%07u", i);
+        uncompressible += component;
+        if (!fixture.AddDirectory(uncompressible)) break;
+        short_uncompressible = ExistingShortPath(uncompressible);
+        if (short_uncompressible.size() > 258) break;
+    }
+    Check(short_uncompressible.size() > 258, "already-8.3 components have no bounded short representation");
+    const std::wstring no_short_marker = fixture.root + L"\\no-short-marker";
+    fixture.files.push_back(no_short_marker);
+    if (short_uncompressible.size() > 258) CheckCwdRefused(AsciiPath(uncompressible), no_short_marker);
+
+    const std::wstring outside = fixture.root + L"\\outside-canary";
+    const std::wstring junction = target + L"\\junction";
+    const bool outside_created = fixture.AddDirectory(outside);
+    const bool junction_created = fixture.AddDirectory(junction);
+    const bool linked = outside_created && junction_created && MakeOwnedJunction(junction, outside);
+    Check(linked, "owned long CWD junction fixture created");
+    const std::wstring reparse_marker = outside + L"\\reparse-marker";
+    fixture.files.push_back(reparse_marker);
+    if (linked) CheckCwdRefused(AsciiPath(junction), reparse_marker);
+}
+#endif
+
 int main() {
     kano::infra::ConfigureUnattendedExecution();
     KanoUnattendedProcessResult result{};
@@ -132,6 +484,7 @@ int main() {
           result.cleanup_complete && result.process.stdout_data &&
           std::strstr(result.process.stdout_data, "unattended-cmd"), "cmd payload launch and capture");
     kano_process_free_unattended_result(&result);
+    CheckLongWorkingDirectories();
 #endif
 
     result = Run("binary");

@@ -8,6 +8,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <wchar.h>
 #else
 #include <errno.h>
 #include <fcntl.h>
@@ -20,6 +21,19 @@
 #endif
 
 #include "kano_process.h"
+
+#ifdef _WIN32
+struct KanoProcessWorkingDirectory {
+    char* launch_path;
+    wchar_t* logical_path;
+    wchar_t* projected_path;
+    wchar_t* final_path;
+    HANDLE* handles;
+    size_t handle_count;
+    size_t handle_capacity;
+    FILE_ID_INFO identity;
+};
+#endif
 
 struct KanoProcessImpl {
     char* executable;
@@ -38,6 +52,7 @@ struct KanoProcessImpl {
     HANDLE stdout_read;
     HANDLE stderr_read;
     HANDLE job;
+    KanoProcessWorkingDirectory* working_directory;
 #else
     pid_t pid;
     pid_t process_group;
@@ -92,6 +107,267 @@ static char* kano_process_dup_string(const char* value) {
 }
 
 #ifdef _WIN32
+/* CreateProcessA accepts at most 258 CWD bytes, including any trailing slash.
+ * Keep ordinary A-API spellings unchanged. Long paths may use an existing DOS
+ * name only after proving it is another spelling of the same plain directory. */
+static const size_t kano_process_cwd_limit = MAX_PATH - 2;
+static const size_t kano_process_wide_path_capacity = 32768;
+
+static void kano_process_free_working_directory(KanoProcessWorkingDirectory* cwd) {
+    if (!cwd) return;
+    for (size_t i = cwd->handle_count; i > 0; --i) CloseHandle(cwd->handles[i - 1]);
+    free(cwd->handles);
+    free(cwd->launch_path);
+    free(cwd->logical_path);
+    free(cwd->projected_path);
+    free(cwd->final_path);
+    free(cwd);
+}
+
+static bool kano_process_cwd_ascii(const char* path) {
+    for (const unsigned char* p = (const unsigned char*)path; *p; ++p) {
+        if (*p > 127) return false;
+    }
+    return true;
+}
+
+static bool kano_process_cwd_local_drive(const wchar_t* path) {
+    return ((path[0] >= L'A' && path[0] <= L'Z') || (path[0] >= L'a' && path[0] <= L'z')) &&
+        path[1] == L':' && path[2] == L'\\';
+}
+
+static bool kano_process_cwd_keep_handle(KanoProcessWorkingDirectory* cwd, HANDLE handle) {
+    if (cwd->handle_count == cwd->handle_capacity) {
+        const size_t capacity = cwd->handle_capacity ? cwd->handle_capacity * 2 : 16;
+        HANDLE* handles = (HANDLE*)realloc(cwd->handles, capacity * sizeof(HANDLE));
+        if (!handles) {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return false;
+        }
+        cwd->handles = handles;
+        cwd->handle_capacity = capacity;
+    }
+    cwd->handles[cwd->handle_count++] = handle;
+    return true;
+}
+
+static HANDLE kano_process_cwd_open(const wchar_t* path, bool extended) {
+    const size_t length = wcslen(path);
+    if (length + 4 >= kano_process_wide_path_capacity) {
+        SetLastError(ERROR_FILENAME_EXCED_RANGE);
+        return INVALID_HANDLE_VALUE;
+    }
+    wchar_t* native = (wchar_t*)malloc((length + 5) * sizeof(wchar_t));
+    if (!native) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return INVALID_HANDLE_VALUE;
+    }
+    if (extended) {
+        memcpy(native, L"\\\\?\\", 4 * sizeof(wchar_t));
+        memcpy(native + 4, path, (length + 1) * sizeof(wchar_t));
+    } else {
+        memcpy(native, path, (length + 1) * sizeof(wchar_t));
+    }
+    HANDLE handle = CreateFileW(native, FILE_READ_ATTRIBUTES | FILE_TRAVERSE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    DWORD error = GetLastError();
+    free(native);
+    if (handle == INVALID_HANDLE_VALUE) {
+        SetLastError(error);
+        return handle;
+    }
+    FILE_ATTRIBUTE_TAG_INFO attributes;
+    if (!GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &attributes, sizeof(attributes))) {
+        error = GetLastError();
+    } else if (!(attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+               (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        error = ERROR_ACCESS_DENIED;
+    } else if (!SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0)) {
+        error = GetLastError();
+    } else {
+        return handle;
+    }
+    CloseHandle(handle);
+    SetLastError(error);
+    return INVALID_HANDLE_VALUE;
+}
+
+static bool kano_process_cwd_pin_path(KanoProcessWorkingDirectory* cwd, const wchar_t* path,
+                                     bool extended, HANDLE* final_handle) {
+    const size_t length = wcslen(path);
+    wchar_t* prefix = (wchar_t*)malloc((length + 1) * sizeof(wchar_t));
+    if (!prefix) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return false;
+    }
+    memcpy(prefix, path, (length + 1) * sizeof(wchar_t));
+    *final_handle = INVALID_HANDLE_VALUE;
+    for (size_t end = 3; end <= length; ++end) {
+        if (end != 3 && end != length && prefix[end] != L'\\') continue;
+        const wchar_t saved = prefix[end];
+        prefix[end] = 0;
+        HANDLE handle = kano_process_cwd_open(prefix, extended);
+        prefix[end] = saved;
+        if (handle == INVALID_HANDLE_VALUE || !kano_process_cwd_keep_handle(cwd, handle)) {
+            const DWORD error = GetLastError();
+            if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+            free(prefix);
+            SetLastError(error);
+            return false;
+        }
+        *final_handle = handle;
+    }
+    free(prefix);
+    return true;
+}
+
+static bool kano_process_cwd_identity(HANDLE handle, FILE_ID_INFO* identity, wchar_t* final_path) {
+    if (!GetFileInformationByHandleEx(handle, FileIdInfo, identity, sizeof(*identity))) return false;
+    const DWORD length = GetFinalPathNameByHandleW(handle, final_path,
+        (DWORD)kano_process_wide_path_capacity, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (!length) return false;
+    if (length >= kano_process_wide_path_capacity) {
+        SetLastError(ERROR_FILENAME_EXCED_RANGE);
+        return false;
+    }
+    return true;
+}
+
+static bool kano_process_cwd_matches(KanoProcessWorkingDirectory* cwd, HANDLE handle) {
+    FILE_ID_INFO identity;
+    wchar_t* final_path = (wchar_t*)malloc(kano_process_wide_path_capacity * sizeof(wchar_t));
+    if (!final_path) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return false;
+    }
+    bool matches = kano_process_cwd_identity(handle, &identity, final_path);
+    DWORD error = GetLastError();
+    if (matches && (cwd->identity.VolumeSerialNumber != identity.VolumeSerialNumber ||
+        memcmp(&cwd->identity.FileId, &identity.FileId, sizeof(identity.FileId)) != 0 ||
+        CompareStringOrdinal(cwd->final_path, -1, final_path, -1, TRUE) != CSTR_EQUAL)) {
+        matches = false;
+        error = ERROR_INVALID_DATA;
+    }
+    free(final_path);
+    if (!matches) SetLastError(error);
+    return matches;
+}
+
+static bool kano_process_prepare_working_directory(KanoProcess proc) {
+    if (!proc->working_dir || !proc->working_dir[0]) return true;
+    const size_t supplied = strlen(proc->working_dir);
+    char ordinary[MAX_PATH + 1];
+    if (supplied <= kano_process_cwd_limit) {
+        const DWORD resolved = GetFullPathNameA(proc->working_dir, MAX_PATH + 1, ordinary, NULL);
+        if (resolved && resolved <= kano_process_cwd_limit) return true;
+        if (!resolved && GetLastError() != ERROR_FILENAME_EXCED_RANGE) return false;
+    }
+    if (supplied >= kano_process_wide_path_capacity || !kano_process_cwd_ascii(proc->working_dir)) {
+        SetLastError(ERROR_NOT_SUPPORTED);
+        return false;
+    }
+    KanoProcessWorkingDirectory* cwd = (KanoProcessWorkingDirectory*)calloc(1, sizeof(*cwd));
+    if (!cwd) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return false;
+    }
+    proc->working_directory = cwd;
+    cwd->logical_path = (wchar_t*)calloc(kano_process_wide_path_capacity, sizeof(wchar_t));
+    cwd->projected_path = (wchar_t*)calloc(kano_process_wide_path_capacity, sizeof(wchar_t));
+    cwd->final_path = (wchar_t*)calloc(kano_process_wide_path_capacity, sizeof(wchar_t));
+    wchar_t* supplied_path = (wchar_t*)calloc(supplied + 1, sizeof(wchar_t));
+    if (!cwd->logical_path || !cwd->projected_path || !cwd->final_path || !supplied_path) {
+        free(supplied_path);
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return false;
+    }
+    for (size_t i = 0; i < supplied; ++i) supplied_path[i] = (unsigned char)proc->working_dir[i];
+    const DWORD resolved = GetFullPathNameW(supplied_path, (DWORD)kano_process_wide_path_capacity,
+        cwd->logical_path, NULL);
+    const DWORD resolve_error = GetLastError();
+    free(supplied_path);
+    if (!resolved) {
+        SetLastError(resolve_error);
+        return false;
+    }
+    if (resolved + 4 >= kano_process_wide_path_capacity) {
+        SetLastError(ERROR_FILENAME_EXCED_RANGE);
+        return false;
+    }
+    if (!kano_process_cwd_local_drive(cwd->logical_path)) {
+        SetLastError(ERROR_NOT_SUPPORTED);
+        return false;
+    }
+    for (DWORD i = 0; i < resolved; ++i) {
+        if (cwd->logical_path[i] > 127) {
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return false;
+        }
+    }
+    HANDLE logical;
+    if (!kano_process_cwd_pin_path(cwd, cwd->logical_path, true, &logical) ||
+        !kano_process_cwd_identity(logical, &cwd->identity, cwd->final_path)) return false;
+    wchar_t* extended = (wchar_t*)malloc((resolved + 5) * sizeof(wchar_t));
+    if (!extended) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return false;
+    }
+    memcpy(extended, L"\\\\?\\", 4 * sizeof(wchar_t));
+    memcpy(extended + 4, cwd->logical_path, (resolved + 1) * sizeof(wchar_t));
+    DWORD projected = GetShortPathNameW(extended, cwd->projected_path,
+        (DWORD)kano_process_wide_path_capacity);
+    const DWORD projection_error = GetLastError();
+    free(extended);
+    if (!projected) {
+        SetLastError(projection_error);
+        return false;
+    }
+    if (projected >= kano_process_wide_path_capacity ||
+        wcsncmp(cwd->projected_path, L"\\\\?\\", 4) != 0) {
+        SetLastError(ERROR_NOT_SUPPORTED);
+        return false;
+    }
+    projected -= 4;
+    memmove(cwd->projected_path, cwd->projected_path + 4, (projected + 1) * sizeof(wchar_t));
+    if (projected > kano_process_cwd_limit) {
+        SetLastError(ERROR_DIRECTORY);
+        return false;
+    }
+    cwd->launch_path = (char*)calloc(projected + 1, sizeof(char));
+    if (!cwd->launch_path) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return false;
+    }
+    for (DWORD i = 0; i < projected; ++i) {
+        if (cwd->projected_path[i] > 127) {
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return false;
+        }
+        cwd->launch_path[i] = (char)cwd->projected_path[i];
+    }
+    HANDLE physical;
+    return kano_process_cwd_pin_path(cwd, cwd->projected_path, false, &physical) &&
+        kano_process_cwd_matches(cwd, physical);
+}
+
+static bool kano_process_recheck_working_directory(KanoProcess proc) {
+    if (!proc->working_directory) return true;
+    KanoProcessWorkingDirectory* cwd = proc->working_directory;
+    const wchar_t* paths[] = {cwd->logical_path, cwd->projected_path};
+    for (size_t i = 0; i < 2; ++i) {
+        HANDLE handle = kano_process_cwd_open(paths[i], i == 0);
+        if (handle == INVALID_HANDLE_VALUE) return false;
+        const bool matches = kano_process_cwd_matches(cwd, handle);
+        const DWORD error = GetLastError();
+        CloseHandle(handle);
+        if (!matches) {
+            SetLastError(error);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool kano_process_is_cmd_executable(const char* executable) {
     const char* base = executable;
     const char* cursor;
@@ -714,6 +990,13 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
             kano_process_free(proc);
             return NULL;
         }
+        if (!kano_process_prepare_working_directory(proc)) {
+            const DWORD error = GetLastError();
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, error);
+            kano_process_free(proc);
+            SetLastError(error);
+            return NULL;
+        }
 
         memset(&sa, 0, sizeof(sa));
         sa.nLength = sizeof(sa);
@@ -749,6 +1032,15 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
             si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
         }
 
+        if (!kano_process_recheck_working_directory(proc)) {
+            const DWORD error = GetLastError();
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, error);
+            if (stdout_write) CloseHandle(stdout_write);
+            if (stderr_write) CloseHandle(stderr_write);
+            kano_process_free(proc);
+            SetLastError(error);
+            return NULL;
+        }
         ok = CreateProcessA(
             NULL,
             proc->cmdline,
@@ -758,15 +1050,17 @@ static KanoProcess kano_process_spawn_internal(const KanoProcessOptions* options
             CREATE_SUSPENDED | (strict_result && proc->mode == KANO_PROCESS_MODE_CAPTURE
                 ? CREATE_NO_WINDOW : 0),
             NULL,
-            proc->working_dir,
+            proc->working_directory ? proc->working_directory->launch_path : proc->working_dir,
             &si,
             &proc->process_info
         );
         if (!ok) {
-            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, GetLastError());
+            const DWORD error = GetLastError();
+            kano_process_strict_error(strict_result, KANO_UNATTENDED_PROCESS_LAUNCH_FAILED, error);
             if (stdout_write) CloseHandle(stdout_write);
             if (stderr_write) CloseHandle(stderr_write);
             kano_process_free(proc);
+            SetLastError(error);
             return NULL;
         }
         if (strict_result) strict_result->cleanup_complete = false;
@@ -1228,6 +1522,7 @@ void kano_process_free(KanoProcess proc) {
     if (proc->process_info.hProcess) CloseHandle(proc->process_info.hProcess);
     if (proc->process_info.hThread) CloseHandle(proc->process_info.hThread);
     if (proc->job) CloseHandle(proc->job);
+    kano_process_free_working_directory(proc->working_directory);
 #else
     if (proc->stdout_fd >= 0) close(proc->stdout_fd);
     if (proc->stderr_fd >= 0) close(proc->stderr_fd);

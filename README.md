@@ -76,6 +76,20 @@ Public CMake targets currently include:
 - `KanoInfra::timing`
 - `KanoInfra::unattended`
 
+## Windows Process Working Directories
+
+`KanoInfra::process` preserves supported `CreateProcessA` working-directory
+spellings. Explicit directories whose supplied or resolved spelling exceeds
+258 bytes require an existing ASCII DOS short name for the same local-drive
+directory. This does not create short names or change logical arguments.
+
+The long-directory path rejects reparse ancestors and unsupported encodings or
+namespaces, verifies volume/file identity and normalized final paths, and pins
+both directory chains against rename until `kano_process_free`. Admission failure
+returns the existing launch-failure status and native error without spawning or
+retrying in another directory. Command quoting, environment, capture, deadlines,
+and the public process ABI are unchanged.
+
 ## Unattended Native Execution
 
 The header-only `KanoInfra::unattended` target supplies `kano_unattended.hpp`.

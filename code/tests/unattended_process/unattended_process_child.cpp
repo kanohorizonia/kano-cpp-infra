@@ -4,6 +4,8 @@
 #include <string>
 #ifdef _WIN32
 #include <windows.h>
+#include <fcntl.h>
+#include <io.h>
 #else
 #include <signal.h>
 #include <sys/types.h>
@@ -70,6 +72,30 @@ int main(int argc, char** argv) {
         std::fclose(marker);
         return 0;
     }
+#ifdef _WIN32
+    if (!std::strcmp(mode, "cwd-id")) {
+        if (_setmode(_fileno(stdout), _O_BINARY) == -1) return 8;
+        if (argc > 2) {
+            char current[32768];
+            const DWORD size = GetCurrentDirectoryA((DWORD)sizeof(current), current);
+            if (!size || size >= sizeof(current) || std::strcmp(current, argv[2])) return 7;
+        }
+        HANDLE directory = CreateFileW(L".", FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        if (directory == INVALID_HANDLE_VALUE) return 5;
+        FILE_ID_INFO identity{};
+        const bool identified = GetFileInformationByHandleEx(
+            directory, FileIdInfo, &identity, sizeof(identity)) != FALSE;
+        CloseHandle(directory);
+        if (!identified) return 6;
+        std::printf("%016llx:", (unsigned long long)identity.VolumeSerialNumber);
+        for (size_t i = 0; i < sizeof(identity.FileId.Identifier); ++i)
+            std::printf("%02x", (unsigned int)identity.FileId.Identifier[i]);
+        std::putchar('\n');
+        return 0;
+    }
+#endif
     if (!std::strcmp(mode, "noisy")) {
         char bytes[8192];
         std::memset(bytes, 'x', sizeof(bytes));
