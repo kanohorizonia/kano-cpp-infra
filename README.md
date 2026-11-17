@@ -251,15 +251,31 @@ reported as incomplete cleanup.
 
 `Identity` records PID, creation token, and executable image. `QueryIdentity`,
 `CurrentIdentity`, and `IsAlive` validate exact live identities without offering
-a kill-by-PID operation. `LaunchDetached` starts an independent immediate child
+a kill-by-PID operation on Windows and Darwin. Darwin brackets repeated native
+`proc_pidpath` observations with exact-size `PROC_PIDTBSDINFO` reads and requires
+the same nonzero start token and image throughout. Exiting/zombie, denied,
+short, malformed and observed-racing metadata fail closed. Darwin compares image
+bytes exactly; creation tokens are opaque and comparable only on the same host.
+This finite observation does not prevent a later exit/exec and does not establish
+same-user, peer or role authorization. A false `IsAlive` or failed query is **not
+proof of absence**; callers must retain separate cleanup/ownership evidence.
+
+A running Darwin Session exposes that observed identity. If a short child exits
+before a live image can be observed, successful terminal handling remains valid,
+but its identity has only the wait-owned PID, a zero token and an empty image.
+An unobservable still-running child fails startup with owned cleanup. Other
+POSIX Sessions retain a PID/requested executable with zero creation token, and
+general exact identity queries remain unsupported there.
+
+`LaunchDetached` starts an independent immediate child
 without inherited handles or a new per-launch Job; it survives its immediate
 caller's exit and retains any OS-imposed ancestor Job boundary. The detached
-program must own its own workers. These additive APIs currently support
-Windows only and return explicit unsupported errors elsewhere. Existing
+program must own its own workers. `LaunchDetached` and `QueryParent` support
+Windows only and return explicit unsupported results elsewhere. Existing
 cross-platform one-shot process APIs are unchanged.
 
-Windows and POSIX Session support is separate from the Windows-only identity
-and detached-launch APIs above. Linux has an actual controlled-child gate;
+Windows and POSIX Session support is separate from detached launch above.
+Linux has an actual controlled-child gate;
 macOS execution must be qualified by each consumer.
 
 The focused `infra.process_session` test covers protocol I/O, EOF, blocked

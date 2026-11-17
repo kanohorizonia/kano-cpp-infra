@@ -10,6 +10,7 @@
 namespace kano::process {
 
 // Creation time is an opaque OS token; compare it only on the same OS/host.
+// These fields do not establish user, peer, role or mutation authorization.
 struct Identity {
     std::uint64_t pid = 0;
     std::uint64_t creation_time = 0;
@@ -77,8 +78,10 @@ public:
     // when output, EOF, process exit, or the operation deadline is observed.
     SessionResult Poll(int InTimeoutMs = 0);
     bool IsRunning() const;
-    // POSIX reports the owned PID/executable with creation_time=0; general
-    // QueryIdentity/IsAlive remain Windows-only and cannot validate that token.
+    // Windows and running Darwin children have an observed exact identity.
+    // A Darwin child that exits before observation may retain only its owned
+    // PID (zero token, empty image). Other POSIX reports PID/requested executable
+    // with creation_time=0; general identity queries cannot validate that token.
     Identity GetIdentity() const;
     // Immediately terminates only the owned Job/group and confirms its members,
     // root and capture writers have stopped within the cleanup budget.
@@ -101,8 +104,11 @@ struct DetachedResult {
 // exit, while retaining any OS-imposed ancestor Job boundary. The detached
 // executable must establish ownership of its own worker processes.
 DetachedResult LaunchDetached(const SessionOptions& InOptions);
+// Windows/Darwin only. A finite live observation; failure clears OutIdentity
+// and means unavailable/ambiguous, not proven process absence. No argv fallback.
 bool QueryIdentity(std::uint64_t InPid, Identity& OutIdentity, std::string& OutError);
 Identity CurrentIdentity();
+// False includes denied/unsupported/racing observations and is not absence proof.
 bool IsAlive(const Identity& InIdentity);
 // Read-only parent PID with exact child identity checked before/after snapshot.
 bool QueryParent(const Identity& InIdentity, std::uint64_t& OutParent);
