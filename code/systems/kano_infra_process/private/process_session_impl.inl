@@ -6,12 +6,21 @@
 #include <pthread.h>
 #if defined(__APPLE__)
 #include <crt_externs.h>
+#include <libproc.h>
+#include <sys/proc.h>
 #else
 extern char** environ;
 #endif
 #endif
 
 namespace kano::process {
+
+#if defined(__APPLE__) && defined(KANO_PROCESS_TESTING)
+static thread_local int kano_process_identity_failure = 0;
+extern "C" void kano_process_test_fail_next_identity_observation(int InFailure) {
+    kano_process_identity_failure = InFailure;
+}
+#endif
 
 struct Session::Impl {
     KanoProcess process = nullptr;
@@ -89,6 +98,84 @@ SessionResult SessionError(const char* InMessage, unsigned long InError = 0) {
     result.system_error = InError;
     return result;
 }
+
+#ifdef __APPLE__
+bool DarwinInfo(int InPid, proc_bsdinfo& OutInfo, unsigned InStage, int InFailure) {
+    errno = 0;
+    int size = proc_pidinfo(InPid, PROC_PIDTBSDINFO, 0, &OutInfo, sizeof(OutInfo));
+#ifdef KANO_PROCESS_TESTING
+    if (InStage == 0) {
+        if (InFailure == 1) { errno = EACCES; size = 0; }
+        if (InFailure == 2) --size;
+        if (InFailure == 7) ++OutInfo.pbi_pid;
+        if (InFailure == 8) OutInfo.pbi_start_tvsec = OutInfo.pbi_start_tvusec = 0;
+        if (InFailure == 9) OutInfo.pbi_start_tvusec = 1000000;
+        if (InFailure == 10) OutInfo.pbi_start_tvsec = std::numeric_limits<std::uint64_t>::max();
+        if (InFailure == 11) OutInfo.pbi_flags |= PROC_FLAG_INEXIT;
+        if (InFailure == 12) OutInfo.pbi_status = SZOMB;
+        if (InFailure == 13) OutInfo.pbi_status = SIDL;
+    }
+    if (InStage == 1 && InFailure == 5) ++OutInfo.pbi_start_tvusec;
+    if (InStage == 2 && InFailure == 16) { errno = ESRCH; size = 0; }
+#else
+    (void)InStage; (void)InFailure;
+#endif
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    return size == sizeof(OutInfo) && OutInfo.pbi_pid == static_cast<unsigned>(InPid) &&
+        (OutInfo.pbi_status == SRUN || OutInfo.pbi_status == SSLEEP || OutInfo.pbi_status == SSTOP) &&
+        !(OutInfo.pbi_flags & PROC_FLAG_INEXIT) && OutInfo.pbi_start_tvusec < 1000000 &&
+        OutInfo.pbi_start_tvsec <= (maximum - OutInfo.pbi_start_tvusec) / 1000000 &&
+        (OutInfo.pbi_start_tvsec || OutInfo.pbi_start_tvusec);
+}
+
+bool DarwinPath(int InPid, std::string& OutPath, unsigned InStage, int InFailure) {
+    char path[PROC_PIDPATHINFO_MAXSIZE]{};
+    errno = 0;
+    int size = proc_pidpath(InPid, path, sizeof(path));
+#ifdef KANO_PROCESS_TESTING
+    if (InStage == 0) {
+        if (InFailure == 3) { errno = EACCES; size = 0; }
+        if (InFailure == 4 && size > 0) --size;
+        if (InFailure == 14) { memset(path, 'x', sizeof(path)); size = sizeof(path); }
+        if (InFailure == 15) path[0] = 'x';
+    }
+    if (InStage == 1 && InFailure == 6 && size > 1) path[1] = path[1] == 'x' ? 'y' : 'x';
+#else
+    (void)InStage; (void)InFailure;
+#endif
+    if (size <= 0 || static_cast<size_t>(size) >= sizeof(path) || path[0] != '/' ||
+        path[size] != '\0' || memchr(path, '\0', static_cast<size_t>(size))) return false;
+    OutPath.assign(path, static_cast<size_t>(size));
+    return true;
+}
+
+bool DarwinIdentity(int InPid, Identity& OutIdentity) {
+    int failure = 0;
+#ifdef KANO_PROCESS_TESTING
+    failure = kano_process_identity_failure;
+    kano_process_identity_failure = 0;
+    if (failure == 17) {
+        // Test only: retain an actual short child's terminal wait state while
+        // simulating the unavailable live-image observation after that exit.
+        siginfo_t info{};
+        (void)waitid(P_PID, static_cast<id_t>(InPid), &info, WEXITED | WNOWAIT);
+        return false;
+    }
+#endif
+    proc_bsdinfo before{}, middle{}, after{};
+    std::string firstPath, lastPath;
+    if (!DarwinInfo(InPid, before, 0, failure) || !DarwinPath(InPid, firstPath, 0, failure) ||
+        !DarwinInfo(InPid, middle, 1, failure) || !DarwinPath(InPid, lastPath, 1, failure) ||
+        !DarwinInfo(InPid, after, 2, failure)) return false;
+    if (before.pbi_start_tvsec != middle.pbi_start_tvsec || before.pbi_start_tvusec != middle.pbi_start_tvusec ||
+        before.pbi_start_tvsec != after.pbi_start_tvsec || before.pbi_start_tvusec != after.pbi_start_tvusec ||
+        firstPath != lastPath) return false;
+    OutIdentity.pid = static_cast<std::uint64_t>(InPid);
+    OutIdentity.creation_time = before.pbi_start_tvsec * 1000000 + before.pbi_start_tvusec;
+    OutIdentity.executable = std::move(firstPath);
+    return true;
+}
+#endif
 
 #ifdef _WIN32
 bool Wide(const std::string& InText, std::wstring& OutText) {
@@ -483,10 +570,22 @@ SessionResult Session::Start(const SessionOptions& InOptions) {
         result.message = "Contained process launch failed (status=" + std::to_string(spawned.status) + ")";
         return result;
     }
-    // This records the owned child only. General POSIX PID identity queries
-    // remain unsupported; waitid(WNOWAIT) retains the actual ownership token.
-    mImpl->identity.pid = (std::uint64_t)mImpl->process->pid;
+#ifdef __APPLE__
+    std::string identityError;
+    if (!QueryIdentity(static_cast<std::uint64_t>(mImpl->process->pid), mImpl->identity, identityError)) {
+        // An exited child remains wait-owned without an observable live image.
+        // Preserve ordinary short commands, but never invent an exact identity.
+        mImpl->State(result);
+        if (!result.ok || result.running) {
+            auto closed = Close(); closed.ok = false;
+            closed.message = "Cannot establish owned running process identity"; return closed;
+        }
+    }
+#else
+    // Other POSIX platforms retain wait ownership, not a general birth token.
     mImpl->identity.executable = InOptions.executable;
+#endif
+    mImpl->identity.pid = (std::uint64_t)mImpl->process->pid;
     mImpl->State(result);
     return result;
 #endif
@@ -822,8 +921,18 @@ bool QueryIdentity(std::uint64_t InPid, Identity& OutIdentity, std::string& OutE
     CloseHandle(process);
     if (!valid) { OutIdentity = {}; OutError = "Process is not live or identity unavailable (error=" + std::to_string(error) + ")"; }
     return valid;
+#elif defined(__APPLE__)
+    if (!InPid || InPid > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+        OutError = "Invalid process identity PID"; return false;
+    }
+    if (!DarwinIdentity(static_cast<int>(InPid), OutIdentity)) {
+        OutIdentity = {};
+        OutError = "Process is not live or exact identity is unavailable";
+        return false;
+    }
+    return true;
 #else
-    (void)InPid; OutError = "Exact process identity is supported on Windows only"; return false;
+    (void)InPid; OutError = "Exact process identity is supported on Windows and Darwin only"; return false;
 #endif
 }
 
@@ -831,6 +940,9 @@ Identity CurrentIdentity() {
     Identity identity;
 #ifdef _WIN32
     HandleIdentity(GetCurrentProcess(), GetCurrentProcessId(), identity);
+#elif defined(__APPLE__)
+    std::string error;
+    QueryIdentity(static_cast<std::uint64_t>(getpid()), identity, error);
 #endif
     return identity;
 }
@@ -843,6 +955,8 @@ bool IsAlive(const Identity& InIdentity) {
     std::wstring expected, actual;
     return current.creation_time == InIdentity.creation_time && Wide(current.executable, actual) &&
         Wide(InIdentity.executable, expected) && _wcsicmp(expected.c_str(), actual.c_str()) == 0;
+#elif defined(__APPLE__)
+    return current.creation_time == InIdentity.creation_time && current.executable == InIdentity.executable;
 #else
     return false;
 #endif

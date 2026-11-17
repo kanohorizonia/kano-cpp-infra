@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #ifdef _WIN32
 #include <windows.h>
@@ -21,6 +23,10 @@ extern "C" void kano_process_test_fail_next_mitigation_setup(void);
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+extern "C" void kano_process_test_fail_next_identity_observation(int InFailure);
+#endif
 #endif
 
 using namespace kano::process;
@@ -101,13 +107,15 @@ struct TestDirectory {
     std::string Child(const std::string& InName) {
         if (root.empty()) return {};
         const std::string path = root + "/" + InName;
-        Check(mkdir(path.c_str(), 0700) == 0, "create isolated UTF-8 working directory");
+        if (mkdir(path.c_str(), 0700) != 0)
+            throw std::runtime_error("Cannot create fresh owned test directory");
         children.push_back(path);
         return path;
     }
     ~TestDirectory() {
-        for (const auto& path : children) rmdir(path.c_str());
-        if (!root.empty()) rmdir(root.c_str());
+        for (const auto& path : children)
+            Check(rmdir(path.c_str()) == 0, "remove exact created child directory");
+        if (!root.empty()) Check(rmdir(root.c_str()) == 0, "remove exact created test directory");
     }
 };
 
@@ -175,6 +183,67 @@ static void CheckInvalid(const SessionOptions& InOptions, const char* InMessage)
     Check(session.Close().cleanup_complete, "invalid launch leaves no cleanup obligation");
 }
 
+#ifdef __APPLE__
+static void RunDarwinIdentityTests() {
+    std::puts("Darwin identity: exact observed current and owned running child");
+    const auto self = CurrentIdentity();
+    char image[PATH_MAX];
+    std::uint32_t imageSize = sizeof(image);
+    char resolved[PATH_MAX];
+    const bool bOwnImage = _NSGetExecutablePath(image, &imageSize) == 0 && realpath(image, resolved);
+    Check(bOwnImage && self.pid == static_cast<std::uint64_t>(getpid()) && self.creation_time &&
+        self.executable == resolved && IsAlive(self), "Darwin current identity uses observed executable and nonzero birth");
+    Identity again; std::string error = "old error";
+    Check(QueryIdentity(self.pid, again, error) && error.empty() && again.pid == self.pid &&
+        again.creation_time == self.creation_time && again.executable == self.executable,
+        "Darwin repeated current identity is stable");
+    auto stale = self; ++stale.creation_time;
+    Check(!IsAlive(stale), "Darwin stale birth does not match");
+    stale = self; stale.executable += ".foreign";
+    Check(!IsAlive(stale), "Darwin wrong image does not match");
+    stale = self; stale.creation_time = 0;
+    Check(!IsAlive(stale), "Darwin incomplete identity does not match");
+    for (const auto pid : {std::uint64_t{0}, std::numeric_limits<std::uint64_t>::max(),
+                          static_cast<std::uint64_t>(std::numeric_limits<int>::max())}) {
+        again = self; error.clear();
+        Check(!QueryIdentity(pid, again, error) && !again.pid && !again.creation_time &&
+            again.executable.empty() && !error.empty(), "Darwin invalid or unavailable PID clears all identity fields");
+    }
+    std::puts("Darwin identity: denied short malformed exiting and racing observations refuse");
+    for (int failure = 1; failure <= 16; ++failure) {
+        kano_process_test_fail_next_identity_observation(failure);
+        again = self; error.clear();
+        Check(!QueryIdentity(self.pid, again, error) && !again.pid && !again.creation_time &&
+            again.executable.empty() && !error.empty(), "Darwin injected ambiguous observation is never an exact identity");
+        Check(IsAlive(self), "Darwin failed observation does not imply current process absence");
+    }
+    Session session;
+    Check(session.Start(Options("echo")).ok, "Darwin owned child starts");
+    const auto child = session.GetIdentity();
+    Check(realpath(KANO_SESSION_CHILD_PATH, resolved) && child.creation_time && child.executable == resolved &&
+        QueryIdentity(child.pid, again, error) && again.creation_time == child.creation_time &&
+        again.executable == child.executable && IsAlive(child), "Darwin Session agrees with independent live query");
+    Check(session.Close().cleanup_complete, "Darwin exact owned child cleanup uses retained Session authority");
+    Check(!IsAlive(child), "Darwin stopped owned identity no longer matches");
+    again = self; error.clear();
+    Check(!QueryIdentity(child.pid, again, error) && !again.pid && !again.creation_time && again.executable.empty(),
+        "Darwin exited child has no observable live identity");
+    Session denied;
+    kano_process_test_fail_next_identity_observation(1);
+    const auto failed = denied.Start(Options("echo"));
+    Check(!failed.ok && failed.cleanup_complete && !denied.GetIdentity().creation_time &&
+        denied.GetIdentity().executable.empty(), "Darwin unobservable running child fails startup with owned cleanup");
+    Session terminal;
+    kano_process_test_fail_next_identity_observation(17);
+    const auto exited = terminal.Start(Options("exit-7"));
+    const auto terminalIdentity = terminal.GetIdentity();
+    Check(exited.ok && !exited.running && exited.exit_code == 7 && terminalIdentity.pid &&
+        !terminalIdentity.creation_time && terminalIdentity.executable.empty(),
+        "Darwin fast terminal success retains only wait-owned PID without a fabricated image");
+    Check(terminal.Close().cleanup_complete, "Darwin unobservable terminal child retains normal owned cleanup");
+}
+#endif
+
 static void RunPosixTests() {
     std::puts("POSIX Session: closed standard descriptor launch regression");
     for (int mask = 1; mask <= 7; ++mask) {
@@ -201,8 +270,13 @@ static void RunPosixTests() {
         Session session;
         Check(session.Start(Options("echo")).ok, "POSIX persistent launch");
         const auto identity = session.GetIdentity();
+#ifdef __APPLE__
+        Check(identity.pid && identity.creation_time && IsAlive(identity),
+            "Darwin running Session exposes its observed exact identity");
+#else
         Check(identity.pid && !identity.creation_time && identity.executable == KANO_SESSION_CHILD_PATH,
-            "POSIX Session exposes only its retained PID and executable");
+            "other POSIX Session exposes only its retained PID and executable");
+#endif
         Check(Until(session, "ready").find("ready") != std::string::npos, "POSIX readiness output");
         std::this_thread::sleep_for(std::chrono::milliseconds(120));
         Check(session.IsRunning(), "POSIX idle session has no lifetime timer");
@@ -712,6 +786,9 @@ int main(int argc, char** argv) {
     (void)argc; (void)argv;
 #endif
     RunEnvironmentPolicyTests();
+#ifdef __APPLE__
+    RunDarwinIdentityTests();
+#endif
 #ifdef _WIN32
     const auto self = CurrentIdentity();
     Check(self.pid && self.creation_time && !self.executable.empty() && IsAlive(self), "current exact identity");
